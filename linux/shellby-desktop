@@ -41,6 +41,7 @@ OBSERVE_MAX_ELEMENTS = 200
 OBSERVE_MAX_DEPTH = 40
 OBSERVE_MAX_CHILDREN = 200
 SCREEN_ELEMENT_TIME_BUDGET_S = 6.0
+APP_LAUNCH_TIMEOUT_S = 25
 FOCUS_SEARCH_BUDGET_S = 1.0
 SMOOTH_SCROLL_FRAMES = 6
 SMOOTH_SCROLL_DISTANCE = 10.0
@@ -396,31 +397,52 @@ def accessibility_available():
     return True
 
 
+def application_frames(application):
+    frames = []
+    for index in range(application.get_child_count()):
+        frame = application.get_child_at_index(index)
+        if frame is not None and frame.get_role() in FRAME_ROLES:
+            frames.append(frame)
+    return frames
+
+
 def accessible_frame(window):
     """Find the AT-SPI top-level accessible that corresponds to a compositor window."""
     desktop = Atspi.get_desktop(0)
-    frames = []
+    own, others = [], []
     for index in range(desktop.get_child_count()):
         try:
             application = desktop.get_child_at_index(index)
-            if application is None or application.get_process_id() != window["pid"]:
+            if application is None:
                 continue
-            for child_index in range(application.get_child_count()):
-                frame = application.get_child_at_index(child_index)
-                if frame is not None and frame.get_role() in FRAME_ROLES:
-                    frames.append(frame)
+            frames = application_frames(application)
+            (own if application.get_process_id() == window["pid"] else others).extend(frames)
         except GLib.Error:
             continue
-    if not frames:
-        return None
-    for frame in frames:
-        if (frame.get_name() or "") == window["title"]:
-            return frame
-    for frame in frames:
+    title = plain_title(window["title"])
+    if own:
+        return pick_frame(own, window, title)
+    # A sandboxed app reaches AT-SPI through a proxy, so its process ID differs: match by title.
+    return pick_frame([frame for frame in others if title and plain_title(frame.get_name()) == title], window, title)
+
+
+def plain_title(title):
+    return "".join(character for character in (title or "") if character.isprintable()).strip()
+
+
+def pick_frame(frames, window, title):
+    named = [frame for frame in frames if plain_title(frame.get_name()) == title]
+    if len(named) == 1:
+        return named[0]
+    candidates = named or frames
+    for frame in candidates:
         extents = extents_of(frame)
         if extents and extents[2] == window["width"] and extents[3] == window["height"]:
             return frame
-    return frames[0] if len(frames) == 1 else None
+    titled = [frame for frame in candidates if plain_title(frame.get_name())]
+    if len(titled) == 1:
+        return titled[0]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def is_chromium(frame):
@@ -1217,7 +1239,7 @@ def launch_application(desktop, name, items):
     uris = [item if "://" in item else Gio.File.new_for_path(os.path.abspath(item)).get_uri() for item in items]
     desktop.call("LaunchApp", GLib.Variant("(sas)", (info.get_id() or "", uris)))
     identifier = (info.get_id() or "").casefold()
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + APP_LAUNCH_TIMEOUT_S
     while time.monotonic() < deadline:
         time.sleep(0.25)
         windows = desktop.windows()
@@ -1227,7 +1249,7 @@ def launch_application(desktop, name, items):
         if target is not None:
             desktop.focus(target)
             return info, target
-    raise Fail("APP_LAUNCH_TIMEOUT", f"{info.get_name()} started but opened no window within 15 seconds.")
+    raise Fail("APP_LAUNCH_TIMEOUT", f"{info.get_name()} started but opened no window within {APP_LAUNCH_TIMEOUT_S} seconds.")
 
 
 def quit_application(desktop, app, force):

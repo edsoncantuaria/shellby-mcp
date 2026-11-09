@@ -3,9 +3,19 @@
 // current user. The extension is what lets Computer Use see and drive a GNOME
 // Wayland session; see linux/README.md.
 import { spawnSync } from "node:child_process"
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
 
@@ -19,19 +29,27 @@ const mode = process.argv[2] ?? "--install"
 const applicationsDir = join(dataHome, "applications")
 const ACCESSIBILITY_FLAG = "--force-renderer-accessibility"
 const OVERRIDE_MARKER = "X-Shellby-Accessibility"
-// Chromium and Electron expose their UI to AT-SPI only with this flag.
-const CHROMIUM_LAUNCHERS = [
-  "google-chrome.desktop",
-  "com.google.Chrome.desktop",
-  "chromium-browser.desktop",
-  "chromium.desktop",
-  "code.desktop",
-  "cursor.desktop",
-  "com.anthropic.Claude.desktop",
+const GECKO_ACCESSIBILITY_ENV = "GNOME_ACCESSIBILITY=1"
+const WEBENGINE_ENV = [
+  "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1",
+  `QTWEBENGINE_CHROMIUM_FLAGS=${ACCESSIBILITY_FLAG}`,
 ]
-const SYSTEM_APPLICATION_DIRS = ["/usr/share/applications", "/var/lib/snapd/desktop/applications"]
+const SYSTEM_APPLICATION_DIRS = [
+  "/usr/share/applications",
+  "/var/lib/snapd/desktop/applications",
+  "/var/lib/flatpak/exports/share/applications",
+  join(dataHome, "flatpak", "exports", "share", "applications"),
+]
+// Files that only Chromium-based programs ship next to their executable.
+const CHROMIUM_FILES = ["chrome_100_percent.pak", "v8_context_snapshot.bin"]
 const MAJOR_VERSION = /(\d+)/u
-const EXEC_LINE = /^(Exec=\S+)/gmu
+const EXEC_LINE = /^Exec=(.*)$/gmu
+const EXEC_LINE_ONCE = /^Exec=(.*)$/mu
+const NO_DISPLAY = /^NoDisplay=true$/mu
+const GECKO_PROGRAM = /^(firefox|thunderbird|librewolf|zen)/u
+const GECKO_APP_ID = /(firefox|thunderbird|librewolf|zen)/iu
+const CHROMIUM_APP_ID = /(chrome|chromium|brave|edge|vivaldi|opera)/iu
+const ELECTRON_SCRIPT = /electron|chrome-sandbox/iu
 const ENTRY_HEADER = /^(\[Desktop Entry\])$/mu
 const DESKTOP_SUFFIX = /\.desktop$/u
 const MARKER_LINE = /^X-Shellby-Accessibility=.*\n/mu
@@ -106,36 +124,122 @@ function install() {
 
 function enableAccessibilityLaunchers() {
   const changed = []
-  for (const name of CHROMIUM_LAUNCHERS) {
-    const local = join(applicationsDir, name)
-    const systemDir = SYSTEM_APPLICATION_DIRS.find((dir) => existsSync(join(dir, name)))
-    if (!(existsSync(local) || systemDir)) continue
-    const launcher = readFileSync(existsSync(local) ? local : join(systemDir, name), "utf8")
-    if (launcher.includes(OVERRIDE_MARKER)) continue
-    const origin = existsSync(local) ? "patched" : "copy"
-    const flagged = launcher
-      .replace(EXEC_LINE, `$1 ${ACCESSIBILITY_FLAG}`)
+  for (const { name, path, text } of installedLaunchers()) {
+    if (text.includes(OVERRIDE_MARKER)) continue
+    const engine = launcherEngine(name, text)
+    if (engine === "webengine") {
+      const flags = WEBENGINE_ENV.map((item) => `--env=${item}`)
+      if (run("flatpak", ["override", "--user", ...flags, appId(name)]).status === 0) {
+        changed.push(appId(name))
+      }
+      continue
+    }
+    if (!engine) continue
+    const edit = engine === "gecko" ? withGeckoEnvironment : withChromiumFlag
+    const origin = path === join(applicationsDir, name) ? "patched" : "copy"
+    const flagged = text
+      .replace(EXEC_LINE, (_line, command) => `Exec=${edit(command, name)}`)
       .replace(ENTRY_HEADER, `$1\n${OVERRIDE_MARKER}=${origin}`)
     mkdirSync(applicationsDir, { recursive: true })
-    writeFileSync(local, flagged)
-    changed.push(name.replace(DESKTOP_SUFFIX, ""))
+    writeFileSync(join(applicationsDir, name), flagged)
+    changed.push(appId(name))
   }
   return changed
 }
 
 function removeAccessibilityLaunchers() {
-  for (const name of CHROMIUM_LAUNCHERS) {
-    const local = join(applicationsDir, name)
-    if (!existsSync(local)) continue
-    const launcher = readFileSync(local, "utf8")
-    if (launcher.includes(`${OVERRIDE_MARKER}=copy`)) rmSync(local)
-    else if (launcher.includes(`${OVERRIDE_MARKER}=patched`)) {
+  for (const { name, path, text } of installedLaunchers()) {
+    if (launcherEngine(name, text) === "webengine") {
+      const unset = WEBENGINE_ENV.map((item) => `--unset-env=${item.split("=")[0]}`)
+      run("flatpak", ["override", "--user", ...unset, appId(name)])
+    }
+    if (path !== join(applicationsDir, name)) continue
+    if (text.includes(`${OVERRIDE_MARKER}=copy`)) rmSync(path)
+    else if (text.includes(`${OVERRIDE_MARKER}=patched`)) {
       writeFileSync(
-        local,
-        launcher.replaceAll(` ${ACCESSIBILITY_FLAG}`, "").replace(MARKER_LINE, "")
+        path,
+        text
+          .replaceAll(` ${ACCESSIBILITY_FLAG}`, "")
+          .replaceAll(`env ${GECKO_ACCESSIBILITY_ENV} `, "")
+          .replace(MARKER_LINE, "")
       )
     }
   }
+}
+
+/** Every visible launcher, with the user's own copy taking precedence. */
+function installedLaunchers() {
+  const launchers = new Map()
+  for (const directory of [applicationsDir, ...SYSTEM_APPLICATION_DIRS]) {
+    if (!existsSync(directory)) continue
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name)
+      if (!name.endsWith(".desktop") || launchers.has(name) || !statSync(path).isFile()) continue
+      const text = readFileSync(path, "utf8")
+      if (!NO_DISPLAY.test(text) && EXEC_LINE_ONCE.test(text))
+        launchers.set(name, { name, path, text })
+    }
+  }
+  return [...launchers.values()]
+}
+
+/** Which accessibility switch a launcher's program needs, if any. */
+function launcherEngine(name, text) {
+  const tokens = text.match(EXEC_LINE_ONCE)[1].split(" ")
+  const program = tokens[programIndex(tokens)]
+  if (basename(program) === "flatpak") return flatpakEngine(appId(name))
+  if (GECKO_PROGRAM.test(basename(program))) return "gecko"
+  if (program.startsWith("/snap/bin/")) {
+    const found = run("find", [
+      `/snap/${basename(program)}/current/`,
+      "-maxdepth",
+      "4",
+      "-name",
+      CHROMIUM_FILES[1],
+      "-print",
+      "-quit",
+    ])
+    return found.stdout.trim() ? "chromium" : undefined
+  }
+  const located = program.includes("/") ? program : run("which", [program]).stdout.trim()
+  if (!(located && existsSync(located))) return
+  const resolved = realpathSync(located)
+  if (CHROMIUM_FILES.some((file) => existsSync(join(dirname(resolved), file)))) return "chromium"
+  const head = readFileSync(resolved).subarray(0, 4096).toString("latin1")
+  return head.startsWith("#!") && ELECTRON_SCRIPT.test(head) ? "chromium" : undefined
+}
+
+function flatpakEngine(id) {
+  const manifest = run("flatpak", ["info", "--show-metadata", id]).stdout
+  if (manifest.includes("qtwebengine")) return "webengine"
+  if (manifest.includes("electronjs") || CHROMIUM_APP_ID.test(id)) return "chromium"
+  return GECKO_APP_ID.test(id) ? "gecko" : undefined
+}
+
+function appId(name) {
+  return name.replace(DESKTOP_SUFFIX, "")
+}
+
+/** Index of the executable in a launcher command, past any `env VAR=value` prefix. */
+function programIndex(tokens) {
+  if (basename(tokens[0]) !== "env") return 0
+  const index = tokens.findIndex((token, position) => position > 0 && !token.includes("="))
+  return index === -1 ? 0 : index
+}
+
+function withChromiumFlag(command, name) {
+  const tokens = command.split(" ")
+  const program = programIndex(tokens)
+  // Flatpak forwards to the app only what comes after the app ID.
+  const after = basename(tokens[program]) === "flatpak" ? tokens.indexOf(appId(name)) : program
+  tokens.splice((after === -1 ? program : after) + 1, 0, ACCESSIBILITY_FLAG)
+  return tokens.join(" ")
+}
+
+function withGeckoEnvironment(command) {
+  if (basename(command.split(" ")[0]) !== "flatpak")
+    return `env ${GECKO_ACCESSIBILITY_ENV} ${command}`
+  return command.replace(" run ", ` run --env=${GECKO_ACCESSIBILITY_ENV} `)
 }
 
 function run(command, args) {
