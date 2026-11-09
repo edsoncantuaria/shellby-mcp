@@ -21,14 +21,21 @@ Then log out and back in (a Wayland shell only loads new extensions at login) an
 node linux/install-extension.mjs --status
 ```
 
-Requires GNOME Shell 50 and `python3-gi python3-gi-cairo gir1.2-atspi-2.0`. `--uninstall` removes it.
+Requires GNOME Shell 50 and `python3-gi python3-gi-cairo gir1.2-atspi-2.0 gir1.2-gtk-3.0`. `--uninstall` removes it.
 
 ## Behavior that differs from the macOS backend
 
-- **No background input.** Every click, key press, scroll, and drag focuses its target window and drives the real pointer and keyboard.
+- **Input stays out of the user's way.** Unless `foreground=true`:
+  - A plain left click on an element runs its AT-SPI action, without moving the pointer or changing focus. Clicking a text field focuses its window and the field through AT-SPI.
+  - Typing writes into the window's focused field, or its only field, through AT-SPI, with no focus change. Otherwise the window borrows focus and hands it back.
+  - Scrolling moves the pointer and puts it back. A covered window borrows focus.
+  - Key presses and drags borrow focus, then return focus and pointer.
+  - Right and double clicks and coordinate clicks use the real pointer and leave focus on the target.
 - **Screenshots are in logical pixels**, so screenshot coordinates equal desktop coordinates on HiDPI displays.
-- **Non-ASCII text is pasted** (clipboard + Ctrl+V) because those characters may be missing from the active keyboard layout. This replaces the clipboard and does not work in terminals, which paste with Ctrl+Shift+V.
-- **Element trees depend on the app.** GTK and Qt apps expose AT-SPI trees; Chrome and Electron only do so when their accessibility support is on. Some GTK4 widgets report bounds offset by their container margin; clicks target the element center, which stays inside the widget in the cases tested.
+- **Typing follows the active keyboard layout**, including symbols that need Shift+AltGr. Characters with no key in the layout go through the GNOME input method, or the clipboard (Ctrl+V) in apps that do not use one, such as Chrome.
+- **`cmd` means Ctrl.** Use `super` for the Super key.
+- **Open menus are part of the window.** Captures grow to include popups, and image coordinates stay valid.
+- **Element trees depend on the app.** GTK and Qt apps expose AT-SPI trees. Chromium and Electron need `--force-renderer-accessibility`, so the installer adds it to their launchers (`--uninstall` reverts it); reopen those apps to apply it, and apps started another way stay opaque. GTK4 reports element positions up to about 12 px off, and its hit test uses the same wrong coordinates, so they cannot be corrected. This only matters for clicks that use the pointer on small widgets; prefer screenshot coordinates there.
 
 ## Trust boundary
 

@@ -16,12 +16,13 @@ import St from "gi://St"
 
 import { Extension } from "resource:///org/gnome/shell/extensions/extension.js"
 import * as Config from "resource:///org/gnome/shell/misc/config.js"
+import { getKeyboardManager } from "resource:///org/gnome/shell/misc/keyboardManager.js"
 import * as Main from "resource:///org/gnome/shell/ui/main.js"
 
 const BUS_NAME = "dev.shellby.Desktop"
 const OBJECT_PATH = "/dev/shellby/Desktop"
 const ERROR_NAME = "dev.shellby.Desktop.Error"
-const API_VERSION = 1
+const API_VERSION = 2
 
 const INTERFACE = `
 <node>
@@ -44,6 +45,11 @@ const INTERFACE = `
       <arg type="d" name="x" direction="in"/>
       <arg type="d" name="y" direction="in"/>
     </method>
+    <method name="PointerPosition"><arg type="ad" direction="out"/></method>
+    <method name="PointerWarp">
+      <arg type="d" name="x" direction="in"/>
+      <arg type="d" name="y" direction="in"/>
+    </method>
     <method name="PointerButton">
       <arg type="u" name="button" direction="in"/>
       <arg type="b" name="pressed" direction="in"/>
@@ -55,6 +61,16 @@ const INTERFACE = `
     <method name="Key">
       <arg type="u" name="keyval" direction="in"/>
       <arg type="b" name="pressed" direction="in"/>
+    </method>
+    <method name="KeyboardGroup"><arg type="u" direction="out"/></method>
+    <method name="CommitText">
+      <arg type="s" name="text" direction="in"/>
+      <arg type="b" direction="out"/>
+    </method>
+    <method name="ScrollContinuous">
+      <arg type="d" name="dx" direction="in"/>
+      <arg type="d" name="dy" direction="in"/>
+      <arg type="b" name="finish" direction="in"/>
     </method>
     <method name="SetClipboard"><arg type="s" name="text" direction="in"/></method>
     <method name="LaunchApp">
@@ -78,6 +94,17 @@ const SCROLL_DIRECTIONS = {
   right: Clutter.ScrollDirection.RIGHT,
 }
 
+// Wayland popups (menus, popovers) are windows of their own; they never get listed.
+const POPUP_WINDOW_TYPES = new Set([
+  Meta.WindowType.MENU,
+  Meta.WindowType.DROPDOWN_MENU,
+  Meta.WindowType.POPUP_MENU,
+  Meta.WindowType.COMBO,
+])
+
+const CURSOR_SIZE = 18
+const CURSOR_LINGER_MS = 1500
+
 function rectangle(rect) {
   return { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
 }
@@ -93,6 +120,26 @@ function findWindow(id) {
   const window = listedWindows().find((candidate) => candidate.get_id() === id)
   if (!window) throw new Error(`WINDOW_NOT_FOUND: No window has ID ${id}.`)
   return window
+}
+
+function popupsOf(window) {
+  return global
+    .get_window_actors()
+    .map((actor) => actor.meta_window)
+    .filter(
+      (candidate) =>
+        candidate &&
+        POPUP_WINDOW_TYPES.has(candidate.get_window_type()) &&
+        candidate.find_root_ancestor() === window
+    )
+}
+
+function unionRectangle(rectangles) {
+  const left = Math.min(...rectangles.map((rect) => rect.x))
+  const top = Math.min(...rectangles.map((rect) => rect.y))
+  const right = Math.max(...rectangles.map((rect) => rect.x + rect.width))
+  const bottom = Math.max(...rectangles.map((rect) => rect.y + rect.height))
+  return { x: left, y: top, width: right - left, height: bottom - top }
 }
 
 function isMaximized(window) {
@@ -117,9 +164,20 @@ class DesktopService {
     this._pointer = seat.create_virtual_device(Clutter.InputDeviceType.POINTER_DEVICE)
     this._keyboard = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE)
     this._tracker = Shell.WindowTracker.get_default()
+    this._cursor = new St.Widget({
+      style: `width: ${CURSOR_SIZE}px; height: ${CURSOR_SIZE}px; border-radius: ${CURSOR_SIZE}px; background-color: rgba(255, 60, 120, 0.85); border: 2px solid white;`,
+      reactive: false,
+      visible: false,
+    })
+    Main.uiGroup.add_child(this._cursor)
+    this._cursorTimer = 0
   }
 
   destroy() {
+    if (this._cursorTimer) GLib.source_remove(this._cursorTimer)
+    this._cursorTimer = 0
+    this._cursor.destroy()
+    this._cursor = null
     this._pointer = null
     this._keyboard = null
   }
@@ -143,9 +201,12 @@ class DesktopService {
           app: app?.get_name() ?? "",
           app_id: app?.get_id() ?? "",
           ...rectangle(window.get_frame_rect()),
-          focused: window.has_focus(),
+          // An open menu holds the focus on behalf of its window.
+          focused: global.display.focus_window?.find_root_ancestor() === window,
           minimized: window.minimized,
           maximized: isMaximized(window),
+          shadow_x: window.get_frame_rect().x - window.get_buffer_rect().x,
+          shadow_y: window.get_frame_rect().y - window.get_buffer_rect().y,
           monitor: window.get_monitor(),
           on_active_workspace: window.located_on_workspace(activeWorkspace),
           stacking: stacking.indexOf(window),
@@ -216,6 +277,7 @@ class DesktopService {
   }
 
   async _screenshot(kind, id, path) {
+    this._hideCursor()
     const file = Gio.File.new_for_path(path)
     const stream = file.replace(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null)
     try {
@@ -236,6 +298,21 @@ class DesktopService {
 
       // Painting the actor captures the window even when it is covered by others.
       const window = findWindow(id)
+      const popups = popupsOf(window)
+      if (popups.length > 0) {
+        // Popups are separate surfaces, so only a stage capture shows them with their window.
+        const bounds = unionRectangle(
+          [window, ...popups].map((item) => rectangle(item.get_frame_rect()))
+        )
+        await new Shell.Screenshot().screenshot_area(
+          bounds.x,
+          bounds.y,
+          bounds.width,
+          bounds.height,
+          stream
+        )
+        return bounds
+      }
       const actor = window.get_compositor_private()
       if (!actor) throw new Error(`WINDOW_NOT_CAPTURABLE: Window ${id} has no compositor actor.`)
       const texture = actor.paint_to_content(null).get_texture()
@@ -263,6 +340,35 @@ class DesktopService {
 
   PointerMove(x, y) {
     this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x, y)
+    this._showCursor(x, y)
+  }
+
+  PointerPosition() {
+    const [x, y] = global.get_pointer()
+    return [x, y]
+  }
+
+  // Puts the pointer back where the user left it, without the agent's marker.
+  PointerWarp(x, y) {
+    this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x, y)
+  }
+
+  _showCursor(x, y) {
+    this._cursor.set_position(Math.round(x - CURSOR_SIZE / 2), Math.round(y - CURSOR_SIZE / 2))
+    Main.uiGroup.set_child_above_sibling(this._cursor, null)
+    this._cursor.show()
+    if (this._cursorTimer) GLib.source_remove(this._cursorTimer)
+    this._cursorTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, CURSOR_LINGER_MS, () => {
+      this._cursorTimer = 0
+      this._cursor.hide()
+      return GLib.SOURCE_REMOVE
+    })
+  }
+
+  _hideCursor() {
+    if (this._cursorTimer) GLib.source_remove(this._cursorTimer)
+    this._cursorTimer = 0
+    this._cursor.hide()
   }
 
   PointerButton(button, pressed) {
@@ -285,12 +391,36 @@ class DesktopService {
     }
   }
 
+  ScrollContinuous(dx, dy, finish) {
+    const flags = finish
+      ? Clutter.ScrollFinishFlags.HORIZONTAL | Clutter.ScrollFinishFlags.VERTICAL
+      : Clutter.ScrollFinishFlags.NONE
+    this._pointer.notify_scroll_continuous(
+      GLib.get_monotonic_time(),
+      dx,
+      dy,
+      Clutter.ScrollSource.FINGER,
+      flags
+    )
+  }
+
   Key(keyval, pressed) {
     this._keyboard.notify_keyval(
       GLib.get_monotonic_time(),
       keyval,
       pressed ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED
     )
+  }
+
+  KeyboardGroup() {
+    return getKeyboardManager().currentLayout?.groupIndex ?? 0
+  }
+
+  // Text delivered through the input method needs no key for any character.
+  CommitText(text) {
+    if (!Main.inputMethod.currentFocus) return false
+    Main.inputMethod.commit(text)
+    return true
   }
 
   SetClipboard(text) {

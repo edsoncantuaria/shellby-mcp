@@ -501,7 +501,7 @@ export function registerComputerUseTools(
     "computer_scroll",
     {
       description:
-        "Scroll an element or screenshot coordinate in the background, or set foreground=true to use the physical pointer.",
+        "Scroll an element or screenshot coordinate, or set foreground=true to scroll at the current pointer.",
       inputSchema: scrollSchema,
       nativeContent: true,
       annotations: {
