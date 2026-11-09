@@ -15,6 +15,7 @@ export interface ChatGptSubagentRequest {
   prompt: string
   agentId: string
   memory: boolean
+  projectUrl?: string
 }
 
 export interface ChatGptCloneSelfRequest {
@@ -66,6 +67,17 @@ export class ChatGptDelegationError extends Error {
   }
 }
 
+export interface ChatGptProjectRequest {
+  name: string
+  /** Custom instructions to set when the project is created (an existing project is left unchanged). */
+  instructions?: string
+}
+
+export interface ChatGptProjectResult {
+  url: string
+  created: boolean
+}
+
 export interface ChatGptDelegationService {
   ask(request: ChatGptSubagentRequest, context: ChatGptDelegationCallContext): Promise<string>
   cloneSelf(
@@ -74,6 +86,10 @@ export interface ChatGptDelegationService {
   ): Promise<string>
   cloneRun(request: ChatGptCloneRunRequest, context: ChatGptDelegationCallContext): Promise<string>
   poll(turnId: string, waitMs: number, signal?: AbortSignal): Promise<ChatGptDelegationPollResult>
+  ensureProject(
+    request: ChatGptProjectRequest,
+    context: ChatGptDelegationCallContext
+  ): Promise<ChatGptProjectResult>
   drainEvents(): string[]
   dispose(): Promise<void>
 }

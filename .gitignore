@@ -10,3 +10,7 @@ dist/
 MEMORY.md
 
 t.*
+
+# Built by setup on Linux
+/vendor/apply-patch/linux-*/
+/ui/*.tsbuildinfo

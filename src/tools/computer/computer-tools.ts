@@ -12,7 +12,7 @@ import {
   type PeekabooResult,
 } from "./peekaboo.js"
 
-const appInput = z.string().min(1).describe("App name, bundle ID, or PID:12345.")
+const appInput = z.string().min(1).describe("App name, bundle or desktop ID, or PID:12345.")
 const snapshotInput = z
   .string()
   .min(1)
@@ -342,7 +342,7 @@ export function registerComputerUseTools(
   const keyToken = z
     .string()
     .regex(KEY_TOKEN_PATTERN)
-    .describe("Key such as return, tab, escape, cmd, shift, or a letter.")
+    .describe("Key such as return, tab, escape, ctrl, cmd, shift, or a letter.")
 
   const pressSchema = z
     .object({
@@ -541,8 +541,7 @@ export function registerComputerUseTools(
   registerTool(
     "computer_drag",
     {
-      description:
-        "Drag between coordinates inside one exact observed window without moving the physical pointer.",
+      description: "Drag between coordinates inside one exact observed window.",
       inputSchema: dragSchema,
       nativeContent: true,
       annotations: {

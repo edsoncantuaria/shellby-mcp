@@ -13,7 +13,7 @@ Keep actual credentials, bound subjects, conversation identifiers, and private t
 
 | Local state | Sensitivity and owner |
 | --- | --- |
-| `<state_dir>/auth.json` | Bound OpenAI subject; [auth store](../../../src/auth/store.ts) enforces private directory/file permissions. HTTP errors do not echo it. |
+| `<state_dir>/auth.json` | Bound OpenAI subjects; [auth store](../../../src/auth/store.ts) enforces private directory/file permissions. HTTP errors do not echo it. |
 | `<state_dir>/subagents.sqlite` and sidecars | Parent session IDs, conversation URLs/counts, agent kind. [Delegation store](../../../src/tools/delegation/store.ts) does not explicitly chmod SQLite files; preserve directory protection. |
 | `agent-commands.yaml` | Tool inputs and failed patch material; [Audit Logging](./audit-logging.md) owns retention/exclusions. |
 | `<state_dir>/logs/` | Error messages/stacks can contain private data; [Runtime Logging](./runtime-logging.md) owns bounded records, private files, and rotation. |

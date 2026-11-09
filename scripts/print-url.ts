@@ -1,7 +1,14 @@
 import process from "node:process"
 import { MCP_CONFIG } from "../src/config.js"
+import { readTunnelSecret } from "../src/server/tunnel-secret.js"
 
 const optional = process.argv.includes("--optional")
+if (MCP_CONFIG.cloudflared?.enabled) {
+  const secret = readTunnelSecret(MCP_CONFIG.cloudflared.secretFile)
+  console.log(`MCP URL: ${MCP_CONFIG.cloudflared.publicUrl?.replace(/\/+$/u, "")}/${secret}/mcp`)
+  printUiUrl()
+  process.exit(0)
+}
 if (!MCP_CONFIG.ngrok.enabled) {
   console.log(`MCP URL: http://${MCP_CONFIG.host}:${MCP_CONFIG.port}/mcp (local only)`)
   printUiUrl()
@@ -13,7 +20,7 @@ if (url) {
   console.log(`MCP URL: ${url}`)
 } else {
   console.error(
-    "MCP URL unavailable. Run `npm start` from Terminal.app, then check `npm run status` and `npm run logs` if it is still unavailable."
+    "MCP URL unavailable. Run `npm start`, then check `npm run status` and `npm run logs` if it is still unavailable."
   )
   if (!optional) process.exitCode = 1
 }

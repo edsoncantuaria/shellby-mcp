@@ -418,7 +418,7 @@ test("hibernation restores only cwd and exported environment and terminates back
     manager,
     "alpha",
     "limited-state-check",
-    `printf '%s|%s|' "$PERSISTED_VALUE" "\${LOCAL_ONLY-unset}"; if (( $+functions[__mcp_ephemeral_fn] )); then printf present; else printf missing; fi`
+    `printf '%s|%s|' "$PERSISTED_VALUE" "\${LOCAL_ONLY-unset}"; if type __mcp_ephemeral_fn >/dev/null 2>&1; then printf present; else printf missing; fi`
   )
   assert.equal(state.output, "yes|unset|missing")
 })

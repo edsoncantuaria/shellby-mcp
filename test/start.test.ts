@@ -16,6 +16,8 @@ async function runStartup(
     pm2Args?: string[]
     fromShellby?: boolean
     agentsEnabled?: boolean
+    computerEnabled?: boolean
+    cloudflaredEnabled?: boolean
     healthInstance?: string
     ngrokEnabled?: boolean
     existingTunnel?: boolean
@@ -29,7 +31,7 @@ async function runStartup(
   await copyFile(new URL("../scripts/pm2.ts", import.meta.url), join(root, "scripts", "pm2.ts"))
   await writeFile(
     join(root, "src", "config.ts"),
-    `export const MCP_CONFIG = ${JSON.stringify({ host: "127.0.0.1", port: 3334, instanceId: "fixture", stateDir: join(root, "state"), workspace: root, ngrok: { enabled: options.ngrokEnabled ?? true }, shell: { rtk: false }, tools: { clones: false, subagents: options.agentsEnabled ?? false } })}`
+    `export const MCP_CONFIG = ${JSON.stringify({ host: "127.0.0.1", port: 3334, instanceId: "fixture", stateDir: join(root, "state"), workspace: root, ngrok: { enabled: options.ngrokEnabled ?? true }, ...(options.cloudflaredEnabled ? { cloudflared: { enabled: true } } : {}), shell: { rtk: false }, tools: { clones: false, subagents: options.agentsEnabled ?? false, computer: options.computerEnabled ?? false }, computerBackend: "peekaboox" })}`
   )
   await writeFile(
     join(root, "scripts", "preflight.ts"),
@@ -127,6 +129,7 @@ for (const fromShellby of [false, true]) {
     assert.deepEqual(calls, [
       { command: "npm", args: ["run", "build"], auditExists: true },
       { command: "pm2", args: ["delete", "shellby-cursor-host"], auditExists: true },
+      { command: "pm2", args: ["delete", "shellby-peekabooxd"], auditExists: true },
       {
         command: "pm2",
         args: ["startOrReload", "ecosystem.config.cjs", "--only", "shellby-ngrok", "--update-env"],
@@ -156,6 +159,7 @@ for (const existingTunnel of [false, true]) {
       [
         ["npm", "run", "build"],
         ["pm2", "delete", "shellby-cursor-host"],
+        ["pm2", "delete", "shellby-peekabooxd"],
         ["browser", "--auto"],
         ["pm2", "jlist", "--silent"],
         ...(existingTunnel ? [["pm2", "delete", "shellby-ngrok"]] : []),
@@ -223,7 +227,7 @@ test("hard restart inside Shellby fails before build or shutdown", async (t) => 
     fromShellby: true,
   })
   assert.equal(result.status, 1)
-  assert.match(result.stderr, /healthy Terminal.app session/u)
+  assert.match(result.stderr, /outside Shellby/u)
   assert.deepEqual(calls, [])
   assert.equal(await readFile(join(root, "agent-commands.yaml"), "utf8"), "previous audit\n")
 })
@@ -237,10 +241,61 @@ test("ordinary startup keeps the PM2 daemon and audit log", async (t) => {
     [
       ["npm", "run", "build"],
       ["pm2", "delete", "shellby-cursor-host"],
+      ["pm2", "delete", "shellby-peekabooxd"],
       ["pm2", "startOrReload", "ecosystem.config.cjs", "--only", "shellby-ngrok", "--update-env"],
       ["pm2", "startOrReload", "ecosystem.config.cjs", "--only", "shellby-mcp", "--update-env"],
     ]
   )
+})
+
+test("Linux Computer Use starts PeekabooX before MCP", async (t) => {
+  const { result, calls } = await runStartup(t, { computerEnabled: true, ngrokEnabled: false })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(
+    calls.map(({ command, args }) => [command, ...args]),
+    [
+      ["npm", "run", "build"],
+      ["pm2", "delete", "shellby-cursor-host"],
+      [
+        "pm2",
+        "startOrReload",
+        "ecosystem.config.cjs",
+        "--only",
+        "shellby-peekabooxd",
+        "--update-env",
+      ],
+      ["pm2", "jlist", "--silent"],
+      ["pm2", "startOrReload", "ecosystem.config.cjs", "--only", "shellby-mcp", "--update-env"],
+    ]
+  )
+})
+
+test("Cloudflare Tunnel starts before MCP without printing its secret URL", async (t) => {
+  const { result, calls } = await runStartup(t, {
+    ngrokEnabled: false,
+    cloudflaredEnabled: true,
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.deepEqual(
+    calls.map(({ command, args }) => [command, ...args]),
+    [
+      ["npm", "run", "build"],
+      ["pm2", "delete", "shellby-cursor-host"],
+      ["pm2", "delete", "shellby-peekabooxd"],
+      ["pm2", "jlist", "--silent"],
+      [
+        "pm2",
+        "startOrReload",
+        "ecosystem.config.cjs",
+        "--only",
+        "shellby-cloudflared",
+        "--update-env",
+      ],
+      ["pm2", "startOrReload", "ecosystem.config.cjs", "--only", "shellby-mcp", "--update-env"],
+    ]
+  )
+  assert.match(result.stdout, /cloudflared: started/u)
+  assert.doesNotMatch(result.stdout, /MCP URL:/u)
 })
 
 test("startup does not report success for another copy on the configured port", async (t) => {
@@ -262,6 +317,7 @@ test("browser startup finishes before reloading services can disconnect the call
     [
       ["npm", "run", "build"],
       ["pm2", "delete", "shellby-cursor-host"],
+      ["pm2", "delete", "shellby-peekabooxd"],
       ["browser", "--auto"],
       ["pm2", "startOrReload", "ecosystem.config.cjs", "--only", "shellby-ngrok", "--update-env"],
       ["pm2", "startOrReload", "ecosystem.config.cjs", "--only", "shellby-mcp", "--update-env"],
@@ -304,7 +360,7 @@ test("PM2 operational commands use Shellby's dedicated daemon and preserve CLI a
   const packageJson = JSON.parse(
     await readFile(new URL("../package.json", import.meta.url), "utf8")
   ) as { scripts: Record<string, string> }
-  for (const name of ["stop", "status", "logs", "pm2"]) {
+  for (const name of ["status", "logs", "pm2"]) {
     const command = packageJson.scripts[name]!
     assert.ok(command.startsWith("node --import tsx scripts/pm2.ts"))
     const args = command.split(" ").slice(4)

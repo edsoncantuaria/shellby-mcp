@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import process from "node:process"
 import test from "node:test"
 
 import { initializeShellbyConfig, initializeWorkspace } from "../scripts/workspace-setup.js"
@@ -48,7 +49,10 @@ test("setup creates all defaults and preserves existing partial configs", async 
   const scaffold = loadPublicConfig(initial.configPath)
   assert.equal(scaffold.state_dir, "~/.shellby")
   assert.equal(scaffold.workspace, "~/Desktop/agent-workspace")
-  assert.deepEqual(scaffold.shell, { path: "/bin/zsh", rtk: false })
+  assert.deepEqual(scaffold.shell, {
+    path: process.platform === "linux" ? "/bin/bash" : "/bin/zsh",
+    rtk: false,
+  })
   assert.deepEqual(scaffold.chatgpt, {
     cdp_endpoint: "http://127.0.0.1:9222",
     project_url: "https://chatgpt.com/",
@@ -59,7 +63,7 @@ test("setup creates all defaults and preserves existing partial configs", async 
   assert.deepEqual(scaffold.logging, { enabled: false })
   assert.equal(scaffold.tools.file_read, true)
   assert.equal(scaffold.tools.file_write, true)
-  assert.equal(scaffold.tools.computer, true)
+  assert.equal(scaffold.tools.computer, process.platform === "darwin")
   assert.deepEqual(scaffold.ngrok, { enabled: true, api_port: 4040, pooling_enabled: false })
 
   const scaffoldText = await readFile(initial.configPath, "utf8")

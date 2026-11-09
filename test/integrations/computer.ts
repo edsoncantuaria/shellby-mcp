@@ -10,6 +10,7 @@ import { connectClient, startMcpHttpServer } from "./helpers.js"
 
 test("routes Computer Use through Peekaboo and preserves semantic errors", {
   timeout: 30_000,
+  skip: process.platform !== "darwin",
 }, async (t) => {
   const root = await mkdtemp(join(tmpdir(), "peekaboo-mcp-integration-"))
   const logPath = join(root, "peekaboo.jsonl")

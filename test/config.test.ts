@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import process from "node:process"
 import test from "node:test"
 import { runInNewContext } from "node:vm"
 import { initializeShellbyConfig } from "../scripts/workspace-setup.js"
@@ -72,6 +73,8 @@ test("loads and validates Shellby TOML config", async (t) => {
       url: "https://shellby.ngrok.app",
       pooling_enabled: true,
     },
+    cloudflared: { enabled: false },
+    auth: { mode: "chatgpt" },
     mcp: { tool_output: "structured" },
     logging: { enabled: true },
     ui: { enabled: true },
@@ -169,7 +172,6 @@ test("warns for invalid or unknown settings without discarding valid siblings", 
     'path = "/bin/bash"',
     'rtk = "false"',
     "[chatgpt]",
-    'cdp_endpoint = "http://127.0.0.1"',
     'project_url = "https://chatgpt.com/g/custom/project"',
     "max_delegated_agents = 0",
     "[mcp]",
@@ -197,15 +199,30 @@ test("warns for invalid or unknown settings without discarding valid siblings", 
     "workspace",
     "obsolete",
     "shell.rtk",
-    "chatgpt.cdp_endpoint",
     "chatgpt.max_delegated_agents",
     "mcp.tool_output",
     "tools.comptuer",
   ]) {
     assert.ok(messages.includes(key), messages)
   }
-  assert.equal(warning.mock.callCount(), 7)
+  assert.equal(warning.mock.callCount(), 6)
   assert.equal(await readFile(path, "utf8"), source)
+})
+
+test("rejects a CDP endpoint outside loopback", async (t) => {
+  const root = await tempDir(t, "shellby-config-cdp-")
+  const path = join(root, "config.toml")
+  await writeFile(path, '[chatgpt]\ncdp_endpoint = "http://192.0.2.1:9222"\n')
+  assert.throws(() => loadPublicConfig(path), /HTTP loopback URL/u)
+})
+
+test("Linux accepts explicitly enabled Computer Use for PeekabooX", {
+  skip: process.platform !== "linux",
+}, async (t) => {
+  const root = await tempDir(t, "shellby-config-computer-")
+  const path = join(root, "config.toml")
+  await writeFile(path, "[tools]\ncomputer = true\n")
+  assert.equal(loadPublicConfig(path).tools.computer, true)
 })
 
 test("defaults malformed sections and normalizes invalid ngrok combinations", async (t) => {
@@ -384,4 +401,36 @@ test("local PM2 ecosystem needs neither ngrok executable nor native configuratio
   })
   assert.equal(module.exports.apps.length, 1)
   assert.equal(module.exports.apps[0]?.name, "shellby-mcp")
+})
+
+test("Cloudflare Tunnel configuration selects a dedicated connector and rejects two public tunnels", async (t) => {
+  const root = await tempDir(t, "shellby-config-cloudflared-")
+  const { configPath } = await initializeShellbyConfig(root)
+  const source =
+    '[ngrok]\nenabled = false\n[cloudflared]\nenabled = true\npublic_url = "https://shellby.example.com"\ntoken_file = "~/.shellby/cloudflared-token"\n'
+  await writeFile(configPath, source)
+  const config = loadPublicConfig(configPath)
+  assert.equal(config.cloudflared.public_url, "https://shellby.example.com")
+  const ecosystem = await readFile(new URL("../ecosystem.config.cjs", import.meta.url), "utf8")
+  const nodeRequire = createRequire(import.meta.url)
+  const module = { exports: {} as { apps: Array<{ name: string; args: string[] }> } }
+  runInNewContext(ecosystem, {
+    __dirname: root,
+    module,
+    require(name: string) {
+      if (name === "./dist/public-config.cjs") return { loadPublicConfig }
+      if (name === "./scripts/ngrok-config.cjs") return { ngrokConfigFiles: () => [] }
+      if (name === "node:child_process") return { execFileSync: () => "/fake/cloudflared" }
+      return nodeRequire(name)
+    },
+  })
+  const connector = module.exports.apps.find((app) => app.name === "shellby-cloudflared")!
+  assert.ok(connector.args.includes("--token-file"))
+  assert.equal(connector.args.includes("--token"), false)
+  assert.equal(
+    module.exports.apps.some((app) => app.name === "shellby-ngrok"),
+    false
+  )
+  await writeFile(configPath, source.replace("enabled = false", "enabled = true"))
+  assert.throws(() => loadPublicConfig(configPath), /Enable only one public tunnel/u)
 })

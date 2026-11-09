@@ -57,6 +57,7 @@ export async function startMcpHttpServer(options: TestMcpServerOptions = {}) {
   const capabilityServices = {
     shellManager,
     peekaboo,
+    peekaboox: services.peekaboox,
     chatGptDelegation,
     webPageOpener: tools.web ? (services.webPageOpener ?? new WebPageOpener()) : undefined,
   }
@@ -79,7 +80,7 @@ export async function startMcpHttpServer(options: TestMcpServerOptions = {}) {
         authStore,
         agentObserver,
       },
-      { ...http, port }
+      { tunnel: false, ...http, port }
     )
     return {
       ...running,
@@ -105,6 +106,7 @@ function createUnavailableDelegationService(): NonNullable<
     cloneSelf: unavailable,
     cloneRun: unavailable,
     poll: unavailable,
+    ensureProject: () => Promise.reject(new Error("not used in this test")),
     drainEvents: () => [],
     dispose: async () => {},
   }

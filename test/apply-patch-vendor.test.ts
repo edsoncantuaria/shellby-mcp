@@ -2,12 +2,19 @@ import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
+import process from "node:process"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
-
 import { tempDir } from "./helpers/temp.js"
 
-const applyPatch = fileURLToPath(new URL("../vendor/apply-patch/apply_patch", import.meta.url))
+const applyPatch = fileURLToPath(
+  new URL(
+    process.platform === "linux"
+      ? `../vendor/apply-patch/linux-${process.arch}/apply_patch`
+      : "../vendor/apply-patch/apply_patch",
+    import.meta.url
+  )
+)
 
 test("executes the vendored apply_patch binary on the host architecture", async (t) => {
   const cwd = await tempDir(t, "apply-patch-vendor-")

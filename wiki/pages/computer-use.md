@@ -7,6 +7,7 @@ paths:
   - src/config.ts
   - vendor/peekaboo/
   - scripts/peekaboo-permissions.mjs
+  - linux/
 ---
 
 # Computer Use
@@ -32,3 +33,7 @@ Schemas define which actions permit background delivery. Coordinate dragging req
 For TCC problems, inspect the responsible launching process and [runtime recovery](./operations/runtime-recovery.md). [peekaboo-permissions.mjs](../../scripts/peekaboo-permissions.mjs) delegates permission checks/grants to Peekaboo. Vendor rebuild/provenance: `scripts/vendor/build-peekaboo.sh`, `vendor/peekaboo/provenance.json`.
 
 Tests: [adapter](../../test/peekaboo.test.ts), [MCP computer cases](../../test/integrations/computer.ts), [vendor smoke](../../test/peekaboo-vendor.test.ts), [image geometry](../../test/image-encoding.test.ts).
+
+## GNOME backend
+
+On GNOME, `MCP_CONFIG.computerBackend` selects the same Peekaboo tool surface and client, pointed at [linux/shellby-desktop](../../linux/shellby-desktop) instead of the macOS binary; other Linux desktops use PeekabooX. The helper keeps Peekaboo's command dialect and JSON envelope, so tool contracts stay in one place. Compositor primitives come from a [GNOME Shell extension](../../linux/gnome-extension/extension.js) because the Shell denies window introspection and screenshots to ordinary session processes. Wayland has no background delivery: actions focus their target and use the real pointer and keyboard, so "background" tool wording does not hold here. Install, HiDPI, paste, and trust-boundary details: [linux/README.md](../../linux/README.md).

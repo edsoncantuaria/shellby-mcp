@@ -19,6 +19,7 @@ import {
   throwIfAborted,
   waitForPromise,
 } from "./chatgpt-browser.js"
+import { ensureChatGptProject } from "./chatgpt-projects.js"
 import {
   type ChatGptCloneRunRequest,
   type ChatGptCloneSelfRequest,
@@ -26,6 +27,8 @@ import {
   ChatGptDelegationError,
   type ChatGptDelegationPollResult,
   type ChatGptDelegationService,
+  type ChatGptProjectRequest,
+  type ChatGptProjectResult,
   type ChatGptSubagentRequest,
 } from "./contracts.js"
 import {
@@ -81,7 +84,8 @@ export function createChatGptDelegationService(): ChatGptDelegationService {
           parentAgent,
           request.agentId,
           request.memory,
-          Date.now()
+          Date.now(),
+          request.projectUrl
         )
         await ensureAgentPage(parentAgent, agent)
         lifecycle.registerAgent(parentAgent, agent)
@@ -427,6 +431,19 @@ export function createChatGptDelegationService(): ChatGptDelegationService {
     }
   }
 
+  async function ensureProject(
+    request: ChatGptProjectRequest,
+    callContext: ChatGptDelegationCallContext
+  ): Promise<ChatGptProjectResult> {
+    await ensureBrowserConnection(callContext.signal)
+    const page = await createManagedPage()
+    try {
+      return await ensureChatGptProject(page, request, callContext.signal)
+    } finally {
+      await closePageIfOpen(page)
+    }
+  }
+
   async function ensureBrowserConnection(signal?: AbortSignal): Promise<void> {
     if (browser?.isConnected() && context) return
     connectPromise ??= connectBrowser().finally(() => {
@@ -566,6 +583,7 @@ export function createChatGptDelegationService(): ChatGptDelegationService {
     cloneSelf,
     cloneRun,
     poll: pollSubagent,
+    ensureProject,
     drainEvents: drainPendingEvents,
     dispose: disposeSubagents,
   }
@@ -574,7 +592,7 @@ export function createChatGptDelegationService(): ChatGptDelegationService {
 function agentTargetUrl(agent: BrowserAgentState): string | undefined {
   if (agent.conversationUrl) return agent.conversationUrl
   if (agent.turnCount !== 0) return undefined
-  return agent.memory ? CHATGPT_START_URL : TEMPORARY_CHAT_URL
+  return agent.memory ? (agent.projectUrl ?? CHATGPT_START_URL) : TEMPORARY_CHAT_URL
 }
 
 async function closePageIfOpen(page: Page | undefined): Promise<void> {

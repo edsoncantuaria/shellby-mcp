@@ -11,6 +11,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "auth:add": "node --import tsx src/auth/add.ts",
     "auth:reset": "node --import tsx src/auth/reset.ts",
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "dev": "node --import tsx --watch src/index.ts",
@@ -31,10 +32,10 @@
     "schemas": "node --import tsx scripts/tool-schemas.ts",
     "setup": "node --import tsx scripts/setup.ts",
     "setup:chatgpt": "node --import tsx scripts/chatgpt/browser.mjs --setup",
-    "setup:computer": "node scripts/peekaboo-permissions.mjs",
+    "setup:computer": "node --import tsx scripts/computer-setup.ts",
     "start": "node --import tsx scripts/start.ts",
     "status": "node --import tsx scripts/pm2.ts status",
-    "stop": "node --import tsx scripts/pm2.ts stop ecosystem.config.cjs",
+    "stop": "node --import tsx scripts/stop.ts",
     "test": "tsx --test",
     "test:live:subagent": "RUN_LIVE_SUBAGENT_TESTS=1 tsx --test test/live/subagent-live.test.ts",
     "tunnel": "node --import tsx scripts/pm2.ts startOrReload ecosystem.config.cjs --only shellby-ngrok --update-env",
@@ -43,6 +44,7 @@
     "ui:dev": "npm --prefix ui run dev",
     "ui:install": "npm --prefix ui ci",
     "vendor:apply-patch": "scripts/vendor/build-apply-patch.sh",
+    "vendor:apply-patch:linux": "bash scripts/vendor/build-apply-patch-linux.sh",
     "vendor:peekaboo": "scripts/vendor/build-peekaboo.sh",
     "vendor:pixel-agents": "node scripts/vendor/pixel-agents.mjs",
     "vendor:pixel-agents:check": "node scripts/vendor/pixel-agents.mjs --check"
@@ -83,7 +85,8 @@
     "node": ">=22.18.0"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "cpu": [
     "arm64",

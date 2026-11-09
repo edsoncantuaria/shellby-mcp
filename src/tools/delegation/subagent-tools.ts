@@ -36,6 +36,20 @@ const subagentInputSchema = z.object({
     .describe(
       "Allow a new agent to access memory outside its conversation. Turn history is always preserved."
     ),
+  project_url: z
+    .url()
+    .refine((value) => {
+      const url = new URL(value)
+      return (
+        url.protocol === "https:" &&
+        url.hostname === "chatgpt.com" &&
+        PROJECT_PATH.test(url.pathname)
+      )
+    }, "project_url must be a https://chatgpt.com/g/g-p-…/project URL.")
+    .optional()
+    .describe(
+      "ChatGPT project where a new memory conversation starts (default: the configured project). Ignored when the agent already has a conversation."
+    ),
 })
 
 const subagentRunResultSchema = z.object({
@@ -64,6 +78,8 @@ const subagentResultSchema = z.object({
   response: z.string().optional(),
   error: z.string().optional(),
 })
+
+const PROJECT_PATH = /^\/g\/g-p-[^/]+\/project\/?$/u
 
 export function registerSubagentTools(
   registerTool: ToolRegistrar,
@@ -117,6 +133,7 @@ export function registerSubagentTools(
               agentId: agent.agent_id,
               prompt: agent.prompt,
               memory: agent.memory,
+              projectUrl: agent.project_url,
             },
             { signal: ctx.mcpReq.signal }
           )
@@ -131,6 +148,39 @@ export function registerSubagentTools(
       }
 
       return delegatedTurnsResult(turns)
+    }
+  )
+
+  registerTool(
+    "chatgpt_project",
+    {
+      description:
+        "Reopen a ChatGPT project by exact name, or create it (project-only memory) with optional instructions. Returns the project URL to pass as subagent_run project_url, so each project keeps its own conversations and memory.",
+      inputSchema: z.object({
+        name: z.string().trim().min(1).max(100).describe("Exact project name."),
+        instructions: z
+          .string()
+          .max(8000)
+          .optional()
+          .describe("Custom instructions, applied only when the project is created."),
+      }),
+      outputSchema: z.object({ url: z.string(), created: z.boolean() }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
+      },
+    },
+    async ({ name, instructions }, ctx) => {
+      const project = await chatGptDelegation.ensureProject(
+        { name, instructions },
+        { signal: ctx.mcpReq.signal }
+      )
+      return {
+        structuredContent: project,
+        content: [{ type: "text" as const, text: JSON.stringify(project) }],
+      }
     }
   )
 

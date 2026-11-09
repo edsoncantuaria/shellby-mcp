@@ -16,8 +16,13 @@ import { summarizePatchExecution } from "./patch-summary.js"
 
 const FAILURE_OUTPUT_TOKENS = 1_024
 const STOP_GRACE_MS = 500
-const DEFAULT_APPLY_PATCH_BINARY = fileURLToPath(
-  new URL("../../../vendor/apply-patch/apply_patch", import.meta.url)
+export const DEFAULT_APPLY_PATCH_BINARY = fileURLToPath(
+  new URL(
+    process.platform === "linux"
+      ? `../../../vendor/apply-patch/linux-${process.arch}/apply_patch`
+      : "../../../vendor/apply-patch/apply_patch",
+    import.meta.url
+  )
 )
 
 export function registerApplyPatchTool(registerTool: ToolRegistrar): void {

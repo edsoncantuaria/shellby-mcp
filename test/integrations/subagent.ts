@@ -34,6 +34,7 @@ for (const toolOutput of ["compact", "structured"] as const) {
             throw new ChatGptDelegationError("UNKNOWN_TURN", `Unknown agent turn: ${turnId}`)
         }
       },
+      ensureProject: () => Promise.reject(new Error("not used in this test")),
       drainEvents: () => [],
       dispose: async () => {},
     }
@@ -154,6 +155,7 @@ test("delivers a completed subagent event on the next MCP response exactly once"
     async poll() {
       throw new Error("unused")
     },
+    ensureProject: () => Promise.reject(new Error("not used in this test")),
     drainEvents() {
       const key = getAgentIdentity()?.taskSlug ?? ""
       const pending = events.get(key) ?? []
@@ -268,6 +270,7 @@ test("runs staggered subagents and retrieves turns across MCP client sessions", 
         activePolls -= 1
       }
     },
+    ensureProject: () => Promise.reject(new Error("not used in this test")),
     drainEvents() {
       return []
     },

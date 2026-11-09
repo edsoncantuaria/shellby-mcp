@@ -36,6 +36,7 @@ test("publishes the assembled MCP tool surface", { timeout: 10_000 }, async (t) 
       "shell_list",
       "shell_close",
       "subagent_run",
+      "chatgpt_project",
       "subagent_result",
       "fetch_url",
       "skill_list",
@@ -78,7 +79,8 @@ test("publishes the assembled MCP tool surface", { timeout: 10_000 }, async (t) 
   const fileWrite = tools.tools.find((tool) => tool.name === "file_write")
   const subagentResult = tools.tools.find((tool) => tool.name === "subagent_result")
   const computerDrag = tools.tools.find((tool) => tool.name === "computer_drag")
-  assert.ok(shellRun && shellPoll && fetchUrl && fileWrite && subagentResult && computerDrag)
+  assert.ok(shellRun && shellPoll && fetchUrl && fileWrite && subagentResult)
+  assert.ok(computerDrag)
 
   const runYield = (shellRun.inputSchema.properties as Record<string, Record<string, unknown>>)
     .yield_time_ms
@@ -113,13 +115,27 @@ test("publishes the assembled MCP tool surface", { timeout: 10_000 }, async (t) 
   ])
   assert.equal(subagentWait?.default, MCP_CONFIG.chatGpt.defaultPollWaitMs)
   assert.equal(subagentWait?.maximum, MCP_CONFIG.chatGpt.maxPollWaitMs)
-  const dragProperties = computerDrag.inputSchema.properties as Record<
-    string,
-    Record<string, unknown>
-  >
-  assert.equal("modifiers" in dragProperties, false)
-  assert.equal(dragProperties.from?.anyOf, undefined)
-  assert.equal(dragProperties.to?.anyOf, undefined)
+  if (computerDrag) {
+    const dragProperties = computerDrag.inputSchema.properties as Record<
+      string,
+      Record<string, unknown>
+    >
+    assert.equal("modifiers" in dragProperties, false)
+    assert.equal(dragProperties.from?.anyOf, undefined)
+    assert.equal(dragProperties.to?.anyOf, undefined)
+  }
+})
+
+test("does not announce Computer Use when disabled", async (t) => {
+  const running = await startMcpHttpServer({ profile: { tools: { computer: false } } })
+  t.after(() => running.close())
+  const connected = await connectClient(running.url, "linux-tool-surface-client")
+  t.after(() => connected.client.close())
+  const tools = await connected.client.listTools()
+  assert.equal(
+    tools.tools.some((tool) => tool.name.startsWith("computer_")),
+    false
+  )
 })
 
 test("bound MCP factories snapshot identity, tool groups, and output mode", {

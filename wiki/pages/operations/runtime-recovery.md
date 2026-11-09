@@ -39,4 +39,4 @@ Startup does not install a LaunchAgent. Migrating older installations from defau
 
 Runtime logs survive restarts and flush after service cleanup. Rotation bounds retained history; see [Runtime Logging](./runtime-logging.md) for failure and buffering behavior.
 
-`auth:reset` clears the bound subject through its confirmation flow; it does not rotate a tunnel URL. `reset-agents` deletes delegated conversation mappings and SQLite sidecars, not upstream ChatGPT conversations. These are different recovery operations. [Delegation runtime](../subagents/browser-chatgpt-subagents.md) explains which agent state can restore.
+`auth:reset` clears every bound subject through its confirmation flow, leaving one open slot; `auth:add` opens one more slot without removing bindings. Neither rotates a tunnel URL. `reset-agents` deletes delegated conversation mappings and SQLite sidecars, not upstream ChatGPT conversations. These are different recovery operations. [Delegation runtime](../subagents/browser-chatgpt-subagents.md) explains which agent state can restore.

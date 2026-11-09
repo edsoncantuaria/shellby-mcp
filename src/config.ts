@@ -3,8 +3,8 @@ import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
+import process from "node:process"
 import { fileURLToPath } from "node:url"
-
 import { loadPublicConfig } from "./public-config.cjs"
 
 const packageMetadata = JSON.parse(
@@ -18,6 +18,10 @@ const repositoryRoot = fileURLToPath(new URL("..", import.meta.url))
 const bundledPeekabooExecutable = fileURLToPath(
   new URL("../vendor/peekaboo/peekaboo", import.meta.url)
 )
+const gnomeDesktop =
+  process.platform === "linux" &&
+  (process.env.XDG_CURRENT_DESKTOP ?? "").split(":").includes("GNOME")
+const linuxDesktopExecutable = fileURLToPath(new URL("../linux/shellby-desktop", import.meta.url))
 const publicConfig = loadPublicConfig()
 const rtkExecutable = resolvePathExecutable("rtk")
 
@@ -25,7 +29,7 @@ export const MCP_CONFIG = {
   /** MCP server identity advertised to connected clients. */
   server: {
     /** MCP server name advertised during initialization. */
-    name: "shellby-mcp",
+    name: publicConfig.mcp.name ?? "shellbymcp",
     /** MCP server version sourced from package.json. */
     version: packageVersion,
     // icons: [
@@ -48,17 +52,25 @@ export const MCP_CONFIG = {
   stateDir: resolveConfiguredPath(publicConfig.state_dir),
   /** Default filesystem workspace exposed to Shellby tools. */
   workspace: resolveConfiguredPath(publicConfig.workspace),
+  /** Which adapter drives Computer Use on this desktop, if any. */
+  computerBackend: resolveComputerBackend(),
   /** Executables used by local computer-control tools. */
   peekaboo: {
-    /** Bundled Peekaboo CLI executable. */
-    executable: bundledPeekabooExecutable,
+    /** Peekaboo-compatible CLI: the bundled binary, or the Linux helper on GNOME. */
+    executable: gnomeDesktop ? linuxDesktopExecutable : bundledPeekabooExecutable,
     /** Companion process used to control the physical cursor. */
     cursorHostExecutable: join(dirname(bundledPeekabooExecutable), "peekaboo-cursor-host"),
+  },
+  /** Linux desktop automation through a dedicated local PeekabooX daemon. */
+  peekaboox: {
+    executable: resolvePathExecutable("peekaboox"),
+    socketPath: join(resolveConfiguredPath(publicConfig.state_dir), "peekaboox", "daemon.sock"),
   },
   /** Browser-backed ChatGPT delegation settings. */
   chatGpt: {
     /** Chrome DevTools endpoint used to control the ChatGPT browser session. */
     cdpEndpoint: publicConfig.chatgpt.cdp_endpoint,
+    browserExecutable: publicConfig.chatgpt.browser_executable,
     /** ChatGPT project URL opened for delegated agents. */
     projectUrl: publicConfig.chatgpt.project_url,
     /** Maximum delegated ChatGPT agents allowed at once. */
@@ -78,6 +90,20 @@ export const MCP_CONFIG = {
     url: publicConfig.ngrok?.url,
     /** Whether ngrok endpoint pooling is enabled. */
     poolingEnabled: publicConfig.ngrok?.pooling_enabled ?? false,
+  },
+  /** Cloudflare Tunnel uses a separate secret URL and local origin listener. */
+  cloudflared: {
+    enabled: publicConfig.cloudflared.enabled,
+    publicUrl: publicConfig.cloudflared.public_url,
+    tokenFile: publicConfig.cloudflared.token_file
+      ? resolveConfiguredPath(publicConfig.cloudflared.token_file)
+      : undefined,
+    originPort: publicConfig.port + 1,
+    secretFile: join(resolveConfiguredPath(publicConfig.state_dir), "cloudflared-url-secret"),
+  },
+  /** Remote authentication settings. */
+  auth: {
+    mode: publicConfig.auth.mode,
   },
   /** MCP protocol presentation settings. */
   mcp: {
@@ -167,7 +193,7 @@ export const MCP_CONFIG = {
     skills: publicConfig.tools.skills,
     /** Enables local image viewing tools. */
     image: publicConfig.tools.image,
-    /** Enables macOS computer-control tools. */
+    /** Enables platform-specific computer-control tools. */
     computer: publicConfig.tools.computer,
   },
 }
@@ -185,6 +211,11 @@ function resolvePathExecutable(name: string): string | undefined {
   return executable || undefined
 }
 
+function resolveComputerBackend(): "peekaboo" | "peekaboox" | undefined {
+  if (process.platform === "darwin" || gnomeDesktop) return "peekaboo"
+  return process.platform === "linux" ? "peekaboox" : undefined
+}
+
 export function buildMcpInstructions(): string {
-  return "# Shellby MCP\n\nThis MCP acts as a connector to a fully permissioned macOS machine. This is normally a personal Mac, do not run destructive commands without explicit approval.\n\n- Call start_here exactly once per conversation before using other Shellby tools."
+  return `# Shellby MCP\n\nThis MCP acts as a connector to a fully permissioned ${process.platform === "darwin" ? "macOS" : "Linux"} machine. Do not run destructive commands without explicit approval.\n\n- Call start_here exactly once per conversation before using other Shellby tools.`
 }

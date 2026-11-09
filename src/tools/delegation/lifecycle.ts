@@ -27,6 +27,7 @@ interface AgentState {
   agentId: string
   kind: "subagent" | "clone"
   memory: boolean
+  projectUrl?: string
   status: BrowserAgentStatus
   page?: Page
   conversationUrl?: string
@@ -139,13 +140,15 @@ export class DelegationLifecycle {
     parentAgent: AgentIdentity | undefined,
     agentId: string,
     memory: boolean,
-    now: number
+    now: number,
+    projectUrl?: string
   ): BrowserAgentState {
     const persisted = memory ? this.readPersistedAgent(parentAgent, agentId) : undefined
     return {
       agentId,
       kind: persisted?.kind ?? "subagent",
       memory,
+      projectUrl,
       status: "idle",
       lastUsedAt: now,
       turnCount: persisted?.turnCount ?? 0,
@@ -212,7 +215,7 @@ export class DelegationLifecycle {
       if (pageUrl && extractConversationId(pageUrl) === conversationId) {
         agent.conversationUrl = pageUrl
       } else if (extractConversationId(agent.conversationUrl ?? "") !== conversationId) {
-        const url = new URL(MCP_CONFIG.chatGpt.projectUrl)
+        const url = new URL(agent.projectUrl ?? MCP_CONFIG.chatGpt.projectUrl)
         const encodedId = encodeURIComponent(conversationId)
         if (PROJECT_PATH_PATTERN.test(url.pathname)) {
           url.pathname = `${url.pathname.replace(PROJECT_SUFFIX_PATTERN, "")}/c/${encodedId}`

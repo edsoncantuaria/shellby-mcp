@@ -1,0 +1,7 @@
+{
+  "uuid": "shellby-desktop@shellby-mcp",
+  "name": "Shellby Desktop",
+  "description": "Session D-Bus service that lets Shellby MCP Computer Use list and manage windows, capture screenshots, and inject pointer and keyboard input.",
+  "shell-version": ["50"],
+  "url": "https://github.com/Serbyte-Development/shellby-mcp"
+}

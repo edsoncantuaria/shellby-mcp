@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { mkdir } from "node:fs/promises"
+import { access, mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
@@ -45,7 +45,12 @@ note("Configuration", formatConfigPath(config))
 const { MCP_CONFIG } = await import("../src/config.js")
 
 const prerequisiteStep = spinner("Checking prerequisites")
-const { errors } = await checkPublicRuntime(MCP_CONFIG.ngrok.enabled)
+const { errors } = await checkPublicRuntime(
+  MCP_CONFIG.ngrok.enabled,
+  MCP_CONFIG.shell.path,
+  MCP_CONFIG.tools.computer && MCP_CONFIG.computerBackend === "peekaboox",
+  MCP_CONFIG.cloudflared
+)
 if (errors.length > 0) {
   prerequisiteStep.fail("Prerequisites need attention")
   failure("Setup cannot continue", errors)
@@ -67,12 +72,31 @@ note("Workspace", workspace.agentsPath)
 
 await commandStep("Building Shellby MCP", "Build ready", "npm", ["run", "build"])
 
+if (process.platform === "linux" && MCP_CONFIG.tools.applyPatch) {
+  const binary = join(
+    scriptsDir,
+    "..",
+    "vendor",
+    "apply-patch",
+    `linux-${process.arch}`,
+    "apply_patch"
+  )
+  try {
+    await access(binary)
+  } catch {
+    await commandStep("Building Linux apply_patch", "Linux apply_patch ready", "npm", [
+      "run",
+      "vendor:apply-patch:linux",
+    ])
+  }
+}
+
 if (MCP_CONFIG.tools.computer) {
   const computer = await commandStep(
     "Checking Computer Use",
     "Computer Use checked",
     process.execPath,
-    [join(scriptsDir, "peekaboo-permissions.mjs"), "--status", "--optional"],
+    ["--import", "tsx", join(scriptsDir, "computer-setup.ts"), "--status", "--optional"],
     { allowFailure: true }
   )
   note("Computer Use", combinedOutput(computer))

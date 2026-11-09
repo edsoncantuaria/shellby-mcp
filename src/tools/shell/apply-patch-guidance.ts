@@ -3,7 +3,7 @@ const APPLY_PATCH_TOOL_GUIDANCE =
 
 const SHELL_FILE_EDIT_NOTICE = "Use the `apply_patch` MCP tool over `shell_run` for file changes."
 const APPLY_PATCH_COMMAND_NOT_FOUND_LINE =
-  /(^|\n)[^\n]*command not found:\s*apply_patch[^\n]*(?=\n|$)/giu
+  /(^|\n)[^\n]*(?:command not found:\s*apply_patch|apply_patch:\s*command not found|apply_patch:\s*comando não encontrado|comando não encontrado:\s*apply_patch)[^\n]*(?=\n|$)/giu
 const SHELL_FILE_WRITE_PATTERN =
   /\b(?:cat|echo|printf)\b[^\n]*(?:\s|[;&|])>{1,2}\s*[^\s&|;]+|\btee\b(?:\s+-[A-Za-z]+)*\s+[^|;&\n]+|\bsed\b[^\n]*\s-i(?:\s|['".]|$)|\bperl\b[^\n]*\s-[A-Za-z]*i[A-Za-z]*\b|\.(?:write_text|write_bytes)\s*\(|\bopen\s*\([^)]*,\s*["'][wax](?:\+)?["']|\bwriteFile(?:Sync)?\s*\(/mu
 

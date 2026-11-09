@@ -27,7 +27,18 @@ export async function observeAssistantResponse(
   const httpTracker = new ChatGptTurnTracker(input.prompt, input.onActivity, input.onConversationId)
   const requestIds = new Set<string>()
   const buffers = new Map<string, string>()
+  const knownTurnIds = new Set(
+    await page
+      .locator("section[data-turn-id][data-turn]")
+      .evaluateAll((sections) =>
+        sections
+          .map((section) => section.getAttribute("data-turn-id"))
+          .filter((id): id is string => Boolean(id))
+      )
+  )
   let cdp: CDPSession | undefined
+  let domPoll: NodeJS.Timeout | undefined
+  let domPolling = false
   let settled = false
   let resolveResponse!: (response: ChatGptTurnCompletion) => void
   let rejectResponse!: (error: unknown) => void
@@ -38,6 +49,7 @@ export async function observeAssistantResponse(
 
   const cleanup = async (): Promise<void> => {
     page.off("close", pageCloseHandler)
+    if (domPoll) clearInterval(domPoll)
     await cdp?.detach().catch(() => undefined)
     cdp = undefined
   }
@@ -128,6 +140,19 @@ export async function observeAssistantResponse(
     void cleanup()
   }
 
+  const pollCompletedDomTurn = async (): Promise<void> => {
+    if (settled || domPolling || page.isClosed()) return
+    domPolling = true
+    try {
+      const text = await completedDomResponse(page, knownTurnIds, input.prompt)
+      if (text && !settled) finish({ text })
+    } catch {
+      // Navigation and transient DOM replacement are handled on the next poll.
+    } finally {
+      domPolling = false
+    }
+  }
+
   try {
     cdp = await page.context().newCDPSession(page)
     await cdp.send("Network.enable")
@@ -137,6 +162,7 @@ export async function observeAssistantResponse(
     cdp.on("Network.dataReceived", dataHandler)
     cdp.on("Network.loadingFinished", loadingFinishedHandler)
     page.on("close", pageCloseHandler)
+    domPoll = setInterval(() => void pollCompletedDomTurn(), 1_000)
   } catch (error) {
     await cleanup()
     throw error
@@ -152,6 +178,30 @@ export async function observeAssistantResponse(
       await cleanup()
     },
   }
+}
+
+async function completedDomResponse(
+  page: Page,
+  knownTurnIds: ReadonlySet<string>,
+  prompt: string
+): Promise<string | undefined> {
+  const sections = await page.locator("section[data-turn-id][data-turn]").all()
+  const normalizedPrompt = prompt.replace(/\s+/gu, " ").trim()
+  let matchingUser = false
+  for (const section of sections) {
+    const role = await section.getAttribute("data-turn")
+    if (role === "user") {
+      const id = await section.getAttribute("data-turn-id")
+      const content = (await section.textContent())?.replace(/\s+/gu, " ").trim() ?? ""
+      matchingUser = Boolean(id && !knownTurnIds.has(id) && content.includes(normalizedPrompt))
+    } else if (matchingUser && role === "assistant") {
+      if ((await section.locator('[data-testid="copy-turn-action-button"]').count()) === 0)
+        return undefined
+      const text = await section.locator('[data-message-author-role="assistant"]').textContent()
+      return text?.trim() || undefined
+    }
+  }
+  return undefined
 }
 
 function isConversationEndpoint(value?: string): boolean {

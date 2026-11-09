@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
+import process from "node:process"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 
@@ -8,7 +9,9 @@ const cursorHost = fileURLToPath(
   new URL("../vendor/peekaboo/peekaboo-cursor-host", import.meta.url)
 )
 
-test("ships Universal 2 Peekaboo binaries and executes the CLI", () => {
+test("ships Universal 2 Peekaboo binaries and executes the CLI", {
+  skip: process.platform !== "darwin",
+}, () => {
   for (const executable of [peekaboo, cursorHost]) {
     const architectures = spawnSync("/usr/bin/lipo", ["-archs", executable], { encoding: "utf8" })
     assert.equal(architectures.status, 0, architectures.stderr)

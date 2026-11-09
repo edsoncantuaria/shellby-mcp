@@ -95,6 +95,11 @@ test("print-url uses this copy's ngrok API and filters other upstreams and domai
   assert.ok(address && typeof address !== "string")
   await mkdir(join(root, "scripts", "chatgpt"), { recursive: true })
   await mkdir(join(root, "src"))
+  await mkdir(join(root, "src/server"))
+  await copyFile(
+    new URL("../src/server/tunnel-secret.ts", import.meta.url),
+    join(root, "src/server/tunnel-secret.ts")
+  )
   await writeFile(join(root, "package.json"), '{"type":"module"}\n')
   await copyFile(
     new URL("../scripts/print-url.ts", import.meta.url),
@@ -120,6 +125,11 @@ test("print-url reports the configured local address without contacting ngrok wh
   const root = await tempDir(t, "shellby-local-url-")
   await mkdir(join(root, "scripts", "chatgpt"), { recursive: true })
   await mkdir(join(root, "src"))
+  await mkdir(join(root, "src/server"))
+  await copyFile(
+    new URL("../src/server/tunnel-secret.ts", import.meta.url),
+    join(root, "src/server/tunnel-secret.ts")
+  )
   await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }))
   await copyFile(
     new URL("../scripts/print-url.ts", import.meta.url),
@@ -147,6 +157,11 @@ test("print-url also prints the local UI URL when enabled", async (t) => {
   const root = await tempDir(t, "shellby-ui-url-")
   await mkdir(join(root, "scripts", "chatgpt"), { recursive: true })
   await mkdir(join(root, "src"))
+  await mkdir(join(root, "src/server"))
+  await copyFile(
+    new URL("../src/server/tunnel-secret.ts", import.meta.url),
+    join(root, "src/server/tunnel-secret.ts")
+  )
   await writeFile(join(root, "package.json"), JSON.stringify({ type: "module" }))
   await copyFile(
     new URL("../scripts/print-url.ts", import.meta.url),
@@ -181,7 +196,7 @@ test("two MCP listeners keep separate health identities and remote owner binding
         createMcpServer: createMcpServerFactory({}, { tools: disabledTools }),
         authStore: auth,
       },
-      { port: 0, instanceId: name }
+      { port: 0, instanceId: name, tunnel: false }
     )
     servers.push(server)
     t.after(() => server.close())
@@ -205,9 +220,9 @@ test("two MCP listeners keep separate health identities and remote owner binding
       }),
     })
     await response.text()
-    assert.equal(
-      (await auth.readState()).subject,
-      name,
+    assert.deepEqual(
+      (await auth.readState()).subjects,
+      [name],
       "Host rewrite must pass the guard and bind only this copy"
     )
   }

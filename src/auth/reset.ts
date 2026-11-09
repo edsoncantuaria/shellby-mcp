@@ -10,7 +10,7 @@ const input = createInterface({ input: process.stdin, output: process.stdout })
 console.warn(
   [
     "WARNING: resetting Shellby MCP authentication will:",
-    "- remove the currently bound ChatGPT identity",
+    "- remove every bound ChatGPT identity",
     "- allow a new ChatGPT user to bind on the next tool call",
   ].join("\n")
 )

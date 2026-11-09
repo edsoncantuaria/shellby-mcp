@@ -6,6 +6,7 @@ import process from "node:process"
 import test from "node:test"
 import { fileURLToPath } from "node:url"
 import {
+  checkPublicRuntime,
   checkRtkRuntime,
   isSupportedArchitecture,
   isSupportedNodeVersion,
@@ -28,7 +29,23 @@ test("requires RTK only when shell.rtk is enabled", () => {
   assert.equal(checkRtkRuntime(false, undefined), undefined)
   const missingRtk = checkRtkRuntime(true, undefined)
   assert.ok(missingRtk)
-  assert.match(missingRtk, /brew install rtk/u)
+  assert.match(missingRtk, /Install RTK/u)
+})
+
+test("preflight rejects a missing configured shell", async () => {
+  const result = await checkPublicRuntime(false, "/missing/shellby-shell")
+  assert.match(result.errors.join("\n"), /Configured shell .* is not executable/u)
+})
+
+test("Linux requires PeekabooX only when Computer Use is enabled", {
+  skip: process.platform !== "linux",
+}, async () => {
+  const disabled = await checkPublicRuntime(false, "/bin/bash", false)
+  assert.doesNotMatch(disabled.errors.join("\n"), /PeekabooX/u)
+  const enabled = await checkPublicRuntime(false, "/bin/bash", true)
+  const binary = spawnSync("peekaboox", ["--version"], { encoding: "utf8" })
+  if (binary.error) assert.match(enabled.errors.join("\n"), /PeekabooX/u)
+  else assert.equal(enabled.errors.length, 0)
 })
 
 test("preflight and full setup honor local config without ngrok on PATH", async (t) => {

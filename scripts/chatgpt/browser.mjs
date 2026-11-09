@@ -9,6 +9,7 @@ import { MCP_CONFIG } from "../../src/config.ts"
 const setup = process.argv.includes("--setup")
 const auto = process.argv.includes("--auto")
 const optional = process.argv.includes("--optional")
+const stop = process.argv.includes("--stop")
 const endpoint = new URL(MCP_CONFIG.chatGpt.cdpEndpoint)
 const profileDir = join(MCP_CONFIG.stateDir, "chatgpt-chrome")
 const markerPath = join(profileDir, ".configured")
@@ -17,6 +18,14 @@ const mobileUserAgent =
 const mobileWindowSize = "430,900"
 const configured = await exists(markerPath)
 const cdpReady = await isCdpReady(endpoint)
+if (stop) {
+  const pid = findManagedChromePid()
+  if (pid) {
+    process.kill(pid, "SIGTERM")
+    console.log(`Stopped Shellby Chrome (PID ${pid}).`)
+  } else console.log("Shellby Chrome: not running")
+  process.exit(0)
+}
 
 if (!isLocalEndpoint(endpoint)) {
   console.log(`ChatGPT browser: using configured CDP endpoint ${endpoint.href}`)
@@ -26,6 +35,11 @@ if (!isLocalEndpoint(endpoint)) {
 if (cdpReady && !findManagedChromePid()) {
   fail(
     `CDP endpoint ${endpoint.href} is already in use by another Chrome profile. Give this copy a different chatgpt.cdp_endpoint port or close that browser first.`
+  )
+}
+if (!cdpReady && (await isPortStillOccupied(endpoint))) {
+  fail(
+    `CDP port ${endpoint.port} is occupied by a process that is not serving Chrome DevTools. Change chatgpt.cdp_endpoint or stop that process.`
   )
 }
 
@@ -45,8 +59,10 @@ if (cdpReady) {
       `${endpoint.host} is already serving a Chrome DevTools session. Close that debug Chrome or configure a different chatgpt.cdp_endpoint before setup.`
     )
   }
-  if (auto) hideManagedChrome()
-  else showManagedChrome()
+  if (process.platform === "darwin") {
+    if (auto) hideManagedChrome()
+    else showManagedChrome()
+  }
   console.log("ChatGPT browser: already running")
   if (setup) console.log("Sign into ChatGPT in that dedicated Chrome window if needed.")
   process.exit(0)
@@ -54,7 +70,9 @@ if (cdpReady) {
 
 const chrome = await findChrome()
 if (!chrome) {
-  const message = "Google Chrome was not found in /Applications or ~/Applications."
+  const message = MCP_CONFIG.chatGpt.browserExecutable
+    ? `Configured Chrome executable ${JSON.stringify(MCP_CONFIG.chatGpt.browserExecutable)} is missing or not executable.`
+    : "Chrome/Chromium was not found. Set chatgpt.browser_executable to its absolute path."
   if (auto || optional) {
     console.warn(`ChatGPT browser: ${message}`)
     process.exit(0)
@@ -70,6 +88,9 @@ const child = spawn(
   [
     `--remote-debugging-port=${port}`,
     "--remote-debugging-address=127.0.0.1",
+    ...(process.platform === "linux" && process.env.WAYLAND_DISPLAY
+      ? ["--ozone-platform=wayland"]
+      : []),
     `--user-data-dir=${profileDir}`,
     `--user-agent=${mobileUserAgent}`,
     `--window-size=${mobileWindowSize}`,
@@ -89,7 +110,10 @@ const child = spawn(
 child.unref()
 
 if (!(await waitForCdp(endpoint))) {
-  const message = `Chrome launched but CDP did not become available at ${endpoint.href}`
+  const locked = await exists(join(profileDir, "SingletonLock"))
+  const message = locked
+    ? `Chrome did not expose CDP at ${endpoint.href}; profile ${profileDir} is locked. Close the other Chrome process using this profile and retry.`
+    : `Chrome launched but CDP did not become available at ${endpoint.href}. Check the graphical session, browser executable, and Chrome logs.`
   if (auto || optional) {
     console.warn(`ChatGPT browser: ${message}`)
     process.exit(0)
@@ -99,7 +123,7 @@ if (!(await waitForCdp(endpoint))) {
 }
 
 await writeFile(markerPath, "configured\n", "utf8")
-if (auto) hideManagedChrome()
+if (auto && process.platform === "darwin") hideManagedChrome()
 console.log("ChatGPT browser: running")
 if (setup) {
   console.log(
@@ -108,9 +132,18 @@ if (setup) {
 }
 
 async function findChrome() {
+  if (MCP_CONFIG.chatGpt.browserExecutable) {
+    const browserExecutable = MCP_CONFIG.chatGpt.browserExecutable
+    return (await isExecutable(browserExecutable)) ? browserExecutable : null
+  }
   const candidates = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     join(homedir(), "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+    "/usr/bin/google-chrome-stable",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/snap/bin/chromium",
   ]
 
   const available = await Promise.all(
@@ -124,6 +157,15 @@ async function findChrome() {
     })
   )
   return available.find((candidate) => candidate !== null)
+}
+
+async function isExecutable(path) {
+  try {
+    await access(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function waitForCdp(url, attemptsRemaining = 40) {
@@ -150,6 +192,7 @@ function isLocalEndpoint(url) {
 }
 
 function hideManagedChrome() {
+  if (process.platform !== "darwin") return false
   const pid = findManagedChromePid()
   if (!pid) return false
 
@@ -164,6 +207,7 @@ function hideManagedChrome() {
 }
 
 function showManagedChrome() {
+  if (process.platform !== "darwin") return false
   const pid = findManagedChromePid()
   if (!pid) return false
 
@@ -176,7 +220,7 @@ function showManagedChrome() {
 }
 
 function findManagedChromePid() {
-  const result = spawnSync("/bin/ps", ["-axo", "pid=,command="], {
+  const result = spawnSync("/bin/ps", ["-eo", "pid=,args="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
   })
@@ -186,15 +230,34 @@ function findManagedChromePid() {
   const portArg = `--remote-debugging-port=${endpoint.port}`
   for (const line of result.stdout.split("\n")) {
     const command = `${line} `
-    if (
-      !command.includes("Google Chrome.app/Contents/MacOS/Google Chrome") ||
-      !command.includes(` ${profileArg} `) ||
-      !command.includes(` ${portArg} `)
-    )
-      continue
+    if (!command.includes(` ${profileArg} `) || !command.includes(` ${portArg} `)) continue
     const match = line.trim().match(/^(\d+)\s/u)
     if (match) return Number(match[1])
   }
+}
+
+// A Chrome that is shutting down keeps its CDP port open without answering it.
+async function isPortStillOccupied(url, attemptsRemaining = 40) {
+  if (!(await isPortOccupied(url))) return false
+  if (attemptsRemaining <= 1) return true
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  return isPortStillOccupied(url, attemptsRemaining - 1)
+}
+
+async function isPortOccupied(url) {
+  const { connect } = await import("node:net")
+  return new Promise((resolve) => {
+    const socket = connect(Number(url.port), url.hostname)
+    socket.once("connect", () => {
+      socket.destroy()
+      resolve(true)
+    })
+    socket.once("error", () => resolve(false))
+    socket.setTimeout(500, () => {
+      socket.destroy()
+      resolve(false)
+    })
+  })
 }
 
 function fail(message) {

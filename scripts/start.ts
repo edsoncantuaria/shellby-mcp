@@ -14,12 +14,18 @@ const restarting = process.argv.includes("--restart") || hardRestart
 
 if (hardRestart && process.env.name === "shellby-mcp" && process.env.pm_exec_path) {
   console.error(
-    "A hard restart must run from a healthy Terminal.app session because it replaces PM2 itself. Use `npm run restart` inside Shellby."
+    "A hard restart must run outside Shellby because it replaces PM2 itself. Use `npm run restart` inside Shellby."
   )
   process.exit(1)
 }
 
-const { errors } = await checkPublicRuntime(MCP_CONFIG.ngrok.enabled)
+const usesPeekabooxDaemon = MCP_CONFIG.tools.computer && MCP_CONFIG.computerBackend === "peekaboox"
+const { errors } = await checkPublicRuntime(
+  MCP_CONFIG.ngrok.enabled,
+  MCP_CONFIG.shell.path,
+  usesPeekabooxDaemon,
+  MCP_CONFIG.cloudflared
+)
 const rtkError = checkRtkRuntime(MCP_CONFIG.shell.rtk, MCP_CONFIG.shell.rtkExecutable)
 if (rtkError) errors.push(rtkError)
 
@@ -29,6 +35,16 @@ if (errors.length > 0) {
 }
 
 const workspace = MCP_CONFIG.workspace
+if (process.platform === "linux" && MCP_CONFIG.tools.applyPatch) {
+  try {
+    await access(join(repoRoot, "vendor", "apply-patch", `linux-${process.arch}`, "apply_patch"))
+  } catch {
+    console.error(
+      "Linux apply_patch is missing. Run `npm run setup` or `npm run vendor:apply-patch:linux` first."
+    )
+    process.exit(1)
+  }
+}
 try {
   await access(workspace)
 } catch {
@@ -43,6 +59,9 @@ if (hardRestart) {
 } else {
   runAllowFailure(process.execPath, ["--import", "tsx", pm2Script, "delete", "shellby-cursor-host"])
 }
+if (process.platform === "linux" && !usesPeekabooxDaemon && !hardRestart) {
+  runAllowFailure(process.execPath, ["--import", "tsx", pm2Script, "delete", "shellby-peekabooxd"])
+}
 if (restarting) await rm(join(repoRoot, "agent-commands.yaml"), { force: true })
 if (MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents) {
   run(process.execPath, [
@@ -51,6 +70,22 @@ if (MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents) {
     join(repoRoot, "scripts", "chatgpt", "browser.mjs"),
     "--auto",
   ])
+}
+if (process.platform === "linux" && usesPeekabooxDaemon) {
+  run(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      pm2Script,
+      "startOrReload",
+      "ecosystem.config.cjs",
+      "--only",
+      "shellby-peekabooxd",
+      "--update-env",
+    ],
+    { quiet: true }
+  )
 }
 // Reload MCP last: its shutdown can kill this CLI, but the PM2 daemon completes the app restart.
 if (MCP_CONFIG.ngrok.enabled) {
@@ -80,6 +115,32 @@ if (MCP_CONFIG.ngrok.enabled) {
     })
   }
 }
+if (MCP_CONFIG.cloudflared?.enabled) {
+  run(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      pm2Script,
+      "startOrReload",
+      "ecosystem.config.cjs",
+      "--only",
+      "shellby-cloudflared",
+      "--update-env",
+    ],
+    { quiet: true }
+  )
+} else if (MCP_CONFIG.cloudflared && !hardRestart) {
+  const processes: unknown = JSON.parse(
+    run(process.execPath, ["--import", "tsx", pm2Script, "jlist", "--silent"], { quiet: true })
+      .stdout
+  )
+  if (hasNamedPm2Process(processes, "shellby-cloudflared")) {
+    run(process.execPath, ["--import", "tsx", pm2Script, "delete", "shellby-cloudflared"], {
+      quiet: true,
+    })
+  }
+}
 run(
   process.execPath,
   [
@@ -103,8 +164,14 @@ if (!(await waitForMcp())) {
 }
 
 console.log("MCP server: running")
-console.log(MCP_CONFIG.ngrok.enabled ? "ngrok: running" : "ngrok: disabled (local only)")
-run(process.execPath, ["--import", "tsx", join(repoRoot, "scripts", "print-url.ts")])
+if (MCP_CONFIG.ngrok.enabled) console.log("ngrok: running")
+else if (MCP_CONFIG.cloudflared?.enabled) console.log("cloudflared: started")
+else console.log("ngrok: disabled (local only)")
+if (MCP_CONFIG.cloudflared?.enabled) {
+  console.log("Run `npm run print-url` in your terminal to reveal the private Cloudflare MCP URL.")
+} else {
+  run(process.execPath, ["--import", "tsx", join(repoRoot, "scripts", "print-url.ts")])
+}
 
 interface RunOptions {
   quiet?: boolean
@@ -126,7 +193,8 @@ function run(command: string, args: string[], options: RunOptions = {}): SpawnSy
 }
 
 function runAllowFailure(command: string, args: string[]): void {
-  spawnSync(command, args, { encoding: "utf8" })
+  // Optional cleanup must not hang startup if PM2 stops answering.
+  spawnSync(command, args, { encoding: "utf8", timeout: 30_000 })
 }
 
 async function waitForMcp(attemptsRemaining = 20): Promise<boolean> {

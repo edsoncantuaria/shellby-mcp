@@ -234,6 +234,8 @@ function browserFixture(options: { pageCloseFailures?: number } = {}): {
               selector === "#prompt-textarea" || selector === 'button[data-testid="send-button"]'
             const locator = {
               first: () => locator,
+              evaluateAll: async () => [],
+              all: async () => [],
               count: async () => Number(visible),
               isVisible: async () => visible,
               isEnabled: async () => true,

@@ -5,6 +5,7 @@ import { createMcpServerFactory } from "../src/mcp/server-factory.js"
 import { startMcpHttpServer } from "../src/server/http-server.js"
 import { countTokens, OUTPUT_TOKEN_ENCODING } from "../src/tokenizer.js"
 import { PeekabooClient } from "../src/tools/computer/peekaboo.js"
+import { PeekabooXClient } from "../src/tools/computer/peekaboox.js"
 import { createChatGptDelegationService } from "../src/tools/delegation/chatgpt-service.js"
 import { createShellSession } from "../src/tools/shell/session.js"
 import { createShellSessionManager } from "../src/tools/shell/session-manager.js"
@@ -16,7 +17,12 @@ const shells = MCP_CONFIG.tools.shell
       createShell: () => createShellSession({ cwd: MCP_CONFIG.workspace }),
     })
   : undefined
-const peekaboo = MCP_CONFIG.tools.computer ? new PeekabooClient({ localOnly: true }) : undefined
+const peekaboo =
+  MCP_CONFIG.tools.computer && process.platform === "darwin"
+    ? new PeekabooClient({ localOnly: true })
+    : undefined
+const peekaboox =
+  MCP_CONFIG.tools.computer && process.platform === "linux" ? new PeekabooXClient() : undefined
 const chatGptDelegation =
   MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents
     ? createChatGptDelegationService()
@@ -27,6 +33,7 @@ const running = await startMcpHttpServer(
     createMcpServer: createMcpServerFactory({
       shellManager: shells,
       peekaboo,
+      peekaboox,
       chatGptDelegation,
       webPageOpener,
     }),

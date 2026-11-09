@@ -789,7 +789,7 @@ test("reset kills a TERM-resistant background descendant", { timeout: 10_000 }, 
       "descendant=$!",
       `while [[ ! -s ${quote(readyFile)} ]]; do sleep 0.01; done`,
       `printf '%s|%s' "$descendant" "$$"`,
-    ].join("; ")
+    ].join("\n")
   )
   ;[descendantPid, oldProcessGroup] = started.output
     .split("|")

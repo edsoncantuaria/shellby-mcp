@@ -42,17 +42,17 @@ test("remote MCP binds one OpenAI subject while local MCP remains available", {
   const discovery = await connectClient(running.url, "remote-discovery", undefined, true)
   t.after(() => discovery.client.close())
   assert.ok((await discovery.client.listTools()).tools.length > 0)
-  assert.equal((await authStore.readState()).subject, null)
+  assert.deepEqual((await authStore.readState()).subjects, [])
   await assert.rejects(
     () => discovery.client.callTool({ name: "shell_list", arguments: {} }),
     /403|denied/iu
   )
-  assert.equal((await authStore.readState()).subject, null)
+  assert.deepEqual((await authStore.readState()).subjects, [])
 
   const owner = await connectClient(running.url, "remote-owner", "subject-a", true)
   t.after(() => owner.client.close())
   assert.ok((await owner.client.callTool({ name: "shell_list", arguments: {} })).content)
-  assert.equal((await authStore.readState()).subject, "subject-a")
+  assert.deepEqual((await authStore.readState()).subjects, ["subject-a"])
 
   const sameOwner = await connectClient(
     running.url,
@@ -69,6 +69,11 @@ test("remote MCP binds one OpenAI subject while local MCP remains available", {
     () => otherSubject.client.callTool({ name: "shell_list", arguments: {} }),
     /403|denied/iu
   )
+
+  await authStore.openSlot()
+  assert.ok((await otherSubject.client.callTool({ name: "shell_list", arguments: {} })).content)
+  assert.ok((await owner.client.callTool({ name: "shell_list", arguments: {} })).content)
+  assert.deepEqual((await authStore.readState()).subjects, ["subject-a", "subject-b"])
 })
 
 test("remote MCP owner survives an HTTP server restart", { timeout: 20_000 }, async (t) => {
@@ -86,7 +91,11 @@ test("remote MCP owner survives an HTTP server restart", { timeout: 20_000 }, as
   await running.close()
 
   const secondAuthStore = new ShellbyAuthStore(filePath)
-  assert.deepEqual(await secondAuthStore.ensureState(), { version: 1, subject: "subject-a" })
+  assert.deepEqual(await secondAuthStore.ensureState(), {
+    version: 2,
+    subjects: ["subject-a"],
+    openSlots: 0,
+  })
   running = await startMcpHttpServer({ port, authStore: secondAuthStore })
   t.after(async () => {
     await running.close()

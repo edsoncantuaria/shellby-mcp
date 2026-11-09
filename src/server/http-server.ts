@@ -14,6 +14,7 @@ import { log, withLogContext } from "../logging.js"
 import type { McpServerFactory } from "../mcp/server-factory.js"
 import { asRecord } from "../utils.js"
 import type { McpAuditLogger, McpAuditRequest } from "./audit/audit-log.js"
+import { ensureTunnelSecret } from "./tunnel-secret.js"
 
 const MCP_ROUTE = /^\/mcp$/u
 
@@ -25,6 +26,7 @@ export interface RunningMcpServer {
   host: string
   port: number
   url: string
+  tunnelPort?: number
   close: () => Promise<void>
 }
 
@@ -39,6 +41,8 @@ export interface McpHttpProfileOverrides {
   host?: string
   port?: number
   instanceId?: string
+  tunnel?: { port: number; secretFile: string } | false
+  authMode?: "chatgpt" | "hybrid"
 }
 
 export async function startMcpHttpServer(
@@ -48,6 +52,12 @@ export async function startMcpHttpServer(
   const host = profileOverrides.host ?? MCP_CONFIG.host
   const port = profileOverrides.port ?? MCP_CONFIG.port
   const instanceId = profileOverrides.instanceId ?? MCP_CONFIG.instanceId
+  const authMode = profileOverrides.authMode ?? MCP_CONFIG.auth.mode
+  const tunnel =
+    profileOverrides.tunnel ??
+    (port !== 0 && MCP_CONFIG.cloudflared.enabled
+      ? { port: MCP_CONFIG.cloudflared.originPort, secretFile: MCP_CONFIG.cloudflared.secretFile }
+      : false)
   const { createMcpServer, auditLogger, authStore, agentObserver } = services
   const requestRuntime = new AsyncLocalStorage<RequestRuntimeContext>()
 
@@ -99,7 +109,11 @@ export async function startMcpHttpServer(
       containsToolCall(req.body)
     ) {
       try {
-        await authStore.authorizeToolCall(req.get("x-openai-subject"))
+        await authStore.authorizeToolCall({
+          openaiSubject: req.get("x-openai-subject"),
+          tunnelAuth: req.get("x-shellby-tunnel-auth") === "1",
+          mode: authMode,
+        })
       } catch (error) {
         remoteAuthError(res, error)
         return
@@ -109,6 +123,11 @@ export async function startMcpHttpServer(
   })
 
   const httpServer = createServer((req, res) => {
+    // A Cloudflare hostname accidentally pointed at the local listener must not bypass the secret route.
+    if (tunnel && req.headers["cf-connecting-ip"]) {
+      res.writeHead(404).end()
+      return
+    }
     if (req.url?.split("?")[0] !== "/mcp") return app(req, res)
     const requestId = randomUUID()
     withLogContext({ request_id: requestId }, () => {
@@ -126,6 +145,8 @@ export async function startMcpHttpServer(
     })
   })
   let boundPort: number
+  let tunnelServer: HttpServer | undefined
+  let tunnelPort: number | undefined
   try {
     await listen(httpServer, port, host)
 
@@ -134,9 +155,43 @@ export async function startMcpHttpServer(
       throw new Error("HTTP server did not expose a TCP address.")
     }
     boundPort = address.port
+    if (tunnel) {
+      const secret = ensureTunnelSecret(tunnel.secretFile)
+      tunnelServer = createServer((req, res) => {
+        const [path, query] = (req.url ?? "").split("?", 2)
+        log("info", "tunnel.inbound", {
+          method: req.method,
+          path,
+          userAgent: req.headers["user-agent"],
+          hasSecret: path === `/${secret}/mcp`,
+        })
+        if (path !== `/${secret}/mcp`) {
+          res.writeHead(404).end()
+          return
+        }
+        if (req.method === "HEAD") {
+          res.writeHead(204, { "x-shellby-instance": instanceId }).end()
+          return
+        }
+        req.url = `/mcp${query === undefined ? "" : `?${query}`}`
+        req.headers.host = `${host}:${boundPort}`
+        req.headers["x-shellby-remote"] = "1"
+        req.headers["x-shellby-tunnel-auth"] = "1"
+        app(req, res)
+      })
+      await listen(tunnelServer, tunnel.port, host)
+      const tunnelAddress = tunnelServer.address()
+      if (!tunnelAddress || typeof tunnelAddress === "string")
+        throw new Error("Cloudflare origin did not expose a TCP address.")
+      tunnelPort = tunnelAddress.port
+    }
   } catch (error) {
     const httpClose = closeHttpServerIfListening(httpServer)
-    await Promise.allSettled([mcpHandler.close(), httpClose])
+    await Promise.allSettled([
+      mcpHandler.close(),
+      httpClose,
+      ...(tunnelServer ? [closeHttpServerIfListening(tunnelServer)] : []),
+    ])
     throw error
   }
 
@@ -145,12 +200,14 @@ export async function startMcpHttpServer(
     host,
     port: boundPort,
     url: `http://${host}:${boundPort}/mcp`,
+    tunnelPort,
     close: async () => {
       if (closed) return
       closed = true
       const results = await Promise.allSettled([
         mcpHandler.close(),
         closeHttpServerIfListening(httpServer),
+        ...(tunnelServer ? [closeHttpServerIfListening(tunnelServer)] : []),
       ])
       for (const result of results) {
         if (result.status === "rejected")
@@ -175,7 +232,10 @@ function isTrustedRemoteRequest(req: Request): boolean {
 }
 
 function requestSessionId(req: Request): string | undefined {
-  const value = req.get("x-openai-session")?.trim()
+  const value =
+    req.get("mcp-session-id")?.trim() ??
+    req.get("x-openai-session")?.trim() ??
+    req.get("x-gemini-session")?.trim()
   return value || undefined
 }
 

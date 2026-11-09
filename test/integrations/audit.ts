@@ -24,6 +24,7 @@ test("audits tool calls made through the HTTP MCP boundary", { timeout: 10_000 }
     async poll(_turnId) {
       return { status: "completed", response: "done" }
     },
+    ensureProject: () => Promise.reject(new Error("not used in this test")),
     drainEvents() {
       return []
     },

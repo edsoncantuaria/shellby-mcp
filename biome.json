@@ -278,6 +278,19 @@
           }
         }
       }
+    },
+    {
+      "includes": ["linux/gnome-extension/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnresolvedImports": "off"
+          },
+          "style": {
+            "useGlobalThis": "off"
+          }
+        }
+      }
     }
   ]
 }

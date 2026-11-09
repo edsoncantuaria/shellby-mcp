@@ -5,6 +5,8 @@ import type { McpAuditRequest } from "../server/audit/audit-log.js"
 import { registerApplyPatchTool } from "../tools/apply-patch/apply-patch.js"
 import { registerComputerUseTools } from "../tools/computer/computer-tools.js"
 import type { PeekabooClient } from "../tools/computer/peekaboo.js"
+import type { PeekabooXClient } from "../tools/computer/peekaboox.js"
+import { registerPeekabooXTools } from "../tools/computer/peekaboox-tools.js"
 import { registerCloneTools } from "../tools/delegation/clone-tools.js"
 import type { ChatGptDelegationService } from "../tools/delegation/contracts.js"
 import { registerSubagentTools } from "../tools/delegation/subagent-tools.js"
@@ -31,6 +33,7 @@ export interface CreateMcpServerOptions {
   shellManager?: ShellSessionManager
   chatGptDelegation?: ChatGptDelegationService
   peekaboo?: PeekabooClient
+  peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
   reviewPromptTracker?: ReviewPromptTracker
   auditRequest?: McpAuditRequest
@@ -41,6 +44,7 @@ export interface McpCapabilityServices {
   shellManager?: ShellSessionManager
   chatGptDelegation?: ChatGptDelegationService
   peekaboo?: PeekabooClient
+  peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
 }
 
@@ -117,8 +121,11 @@ function createMcpServer(options: CreateMcpServerOptions, profile: McpRuntimePro
     registerWebTool(registerTool, requireCapabilityService(options.webPageOpener, "web"))
   if (profile.tools.skills) registerSkillTools(registerTool)
   if (profile.tools.image) registerImageTools(registerTool)
-  if (profile.tools.computer)
-    registerComputerUseTools(registerTool, requireCapabilityService(options.peekaboo, "computer"))
+  if (profile.tools.computer) {
+    if (options.peekaboox) registerPeekabooXTools(registerTool, options.peekaboox)
+    else
+      registerComputerUseTools(registerTool, requireCapabilityService(options.peekaboo, "computer"))
+  }
   if (profile.tools.clones)
     registerCloneTools(registerTool, requireCapabilityService(options.chatGptDelegation, "clone"))
   if (profile.tools.review) registerReviewTool(registerTool)

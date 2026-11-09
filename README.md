@@ -1,13 +1,13 @@
 <h1 align="center">Shellby MCP</h1>
 
 <p align="center">
-  A local MCP server that gives ChatGPT Web persistent shells, direct file editing, Computer Use, browser-backed subagents, webpage tools, and reusable skills on macOS.
+  A local MCP server that gives ChatGPT Web persistent shells, direct file editing, browser-backed subagents, webpage tools, and reusable skills on Linux and macOS.
 </p>
 
 <p align="center">
   <a href="https://github.com/Serbyte-Development/shellby-mcp/actions/workflows/ci.yml"><img src="https://github.com/Serbyte-Development/shellby-mcp/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License"></a>
-  <img src="https://img.shields.io/badge/platform-macOS-lightgrey.svg" alt="macOS">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-lightgrey.svg" alt="Linux and macOS">
 </p>
 
 <p align="center">
@@ -18,7 +18,7 @@
 </p>
 
 > [!CAUTION]
-> Shellby MCP runs with the full permissions of your local macOS user. An authorized ChatGPT caller can run commands, edit files, fetch webpages, and control supported applications.
+> Shellby MCP runs with the full permissions of your local user. An authorized ChatGPT caller can run commands, edit files, fetch webpages, and, on macOS only, control supported applications.
 
 ![Shellby MCP architecture showing ChatGPT Web connecting to the local harness and its persistent tools, Computer Use, and subagent runtime](docs/assets/shellby-mcp-architecture.svg)
 
@@ -28,20 +28,20 @@
 | -------------------- | -------------------------------------------------------------------------------------------- |
 | Persistent shells    | Named login shells retain cwd, environment, processes, and command history across MCP calls. |
 | Native `apply_patch` | Native ChatGPT `apply_patch` binary used to edit files independently of shell state.         |
-| Computer Use         | Focused macOS observation and interaction backed by [Peekaboo](https://peekaboo.sh/).        |
+| Computer Use         | Optional desktop observation and input: Peekaboo on macOS, the [Shellby Desktop](linux/README.md) GNOME extension on GNOME, [PeekabooX](https://github.com/nordbyte/PeekabooX) on other Linux desktops. |
 | Browser subagents    | Detached ChatGPT Web conversations with follow-up context and concurrent result retrieval.   |
 | Web and images       | Rendered webpage extraction, bounded document pagination, and native image transport.        |
 | Dynamic skills       | Reusable workflows loaded from `<workspace>/skills/*/SKILL.md`.                              |
 
 ## Requirements
 
-- macOS on Apple Silicon or Intel
+- Linux or macOS on arm64 or x64
 - Node.js 22.18.0 or newer
 - npm
-- An [ngrok](https://ngrok.com/) account and CLI
+- An [ngrok](https://ngrok.com/) account and CLI, or a Cloudflare Tunnel and `cloudflared`
 - A ChatGPT Plus or Higher account with Developer Mode turned on
 
-Google Chrome is optional and is used for browser-backed subagents. Computer Use is optional and uses the Peekaboo package installed with this repository.
+Chrome or Chromium is needed for browser-backed subagents. Linux uses Bash by default and requires Rust/Cargo to build its native `apply_patch` binary from the pinned OpenAI Codex source. Computer Use is optional on both platforms; Linux uses PeekabooX 1.1.2+.
 
 ## Quick start
 
@@ -49,7 +49,53 @@ Google Chrome is optional and is used for browser-backed subagents. Computer Use
 
 [`skills/install-shellby-mcp/SKILL.md`](skills/install-shellby-mcp/SKILL.md)
 
-### Manual install
+### Linux (GNOME/Wayland)
+
+Install Node.js 22.18+, npm, Git, Rust/Cargo 1.95+, Bash, Chrome or Chromium, and the [ngrok CLI](https://ngrok.com/download). The Linux build was verified with Node.js 24.17, Rust/Cargo 1.98, and Chrome 149; older browser versions are not yet verified. Run `ngrok config add-authtoken <token>` using your own ngrok account. In this checkout:
+
+```bash
+npm ci
+npm run setup -- --config-only
+```
+
+Edit `.shellby/config.toml`: set `workspace` to the directory containing your projects and optionally set `chatgpt.browser_executable = "/absolute/path/to/chrome-or-chromium"`. `shell.path` defaults to `/bin/bash`; an installed executable is checked during setup and start. Set `ngrok.enabled = false` only for local testing; ChatGPT Web needs the protected ngrok endpoint. For Linux desktop tools, install PeekabooX 1.1.2+ and set `tools.computer = true`. On Ubuntu x64, download the official `peekaboox_1.1.2_amd64.deb` release, verify SHA-256 `b0b4c66a71ecdc4c49810dbbdb4c0601267c885198ddbeada57cbbc5369be656`, and install with `sudo apt install ./peekaboox_1.1.2_amd64.deb`. On arm64 or other distributions, build the CLI and daemon from the tagged PeekabooX source with `packaging/install-rust.sh`. Then run:
+
+```bash
+npm run setup
+npm run setup:computer
+npm run setup:chatgpt
+npm start
+```
+
+Setup builds `vendor/apply-patch/linux-<architecture>/apply_patch` from the pinned OpenAI Codex commit recorded in `scripts/vendor/build-apply-patch-linux.sh`; Rust/Cargo and network access to GitHub/crates.io are required once. The source commit and SHA-256 are saved beside the binary. Linux never runs the macOS binary or Peekaboo. `npm run setup:chatgpt` opens a dedicated Chrome/Chromium profile under `<state_dir>/chatgpt-chrome`; sign in to ChatGPT there once. The profile and login survive restarts. CDP binds to `127.0.0.1` and uses the configured loopback port (default 9222). On Wayland, Shellby requests Chrome's native Wayland backend. Chrome's normal sandbox remains enabled.
+
+In ChatGPT Developer Mode, create a custom MCP app with the printed `https://.../mcp` URL and select **No Auth**. The first trusted call binds the OpenAI subject. The local dashboard, when `ui.enabled = true`, is at `http://127.0.0.1:3333/ui/` (adjust for `port`).
+
+Use `subagent` with distinct `agent_id` values for independent conversations. Send later work using the same ID, and poll each returned `turn_id` with `subagent_result`. `chatgpt.max_delegated_agents` limits active delegated agents per parent. Turns from different agents can run concurrently; Shellby serializes work for the same agent and persists conversation URLs in its state directory. Give concurrent agents separate files or worktrees and merge their results from the parent conversation; Shellby does not lock project files across agents. ChatGPT authentication, rate limits, and UI changes can interrupt delegation. After signing in, run `npm run test:live:subagent` to test two concurrent conversations and a follow-up on one agent against your real ChatGPT session. This test sends three short prompts.
+
+Operations: `npm start`, `npm run restart`, `npm run status`, `npm run logs`, `npm run stop`. `npm run restart -- --hard` replaces the dedicated PM2 daemon; run it from an ordinary terminal. `npm run stop` also terminates Shellby's managed browser while preserving its profile. Health: `curl -fsS http://127.0.0.1:3333/healthz`; endpoint: `npm run print-url`. If Chrome is missing, set `chatgpt.browser_executable`; if CDP port 9222 is occupied, change `chatgpt.cdp_endpoint`; if the profile is locked, close the other browser using it. An unavailable graphical session requires running setup and browser sign-in later on your desktop.
+
+On GNOME, Computer Use runs through the Shellby Desktop extension instead of PeekabooX and exposes the full `computer_*` tool set. Run `npm run setup:computer`, log out and back in, then check `npm run setup:computer -- --status`. See [linux/README.md](linux/README.md) for behavior and trust boundary. Start Shellby from inside the desktop session so it inherits `XDG_CURRENT_DESKTOP` and the session bus.
+
+On other Linux desktops, Computer Use runs PeekabooX through a Shellby-managed daemon on a per-installation Unix socket under `state_dir`; gRPC is disabled. The MCP exposes `computer_list`, `computer_observe`, `computer_inspect`, `computer_click`, `computer_type`, `computer_hotkey`, and `computer_scroll` when enabled. It does not advertise macOS-only Computer Use actions. Desktop calls are serialized; failed backends return errors. `npm run setup:computer` reports capture and input readiness. GNOME Wayland capture may request portal screen-sharing permission. Install `wtype` for text and `ydotool` for hotkeys/scrolling where needed; PeekabooX's doctor reports the actual backend state. The GNOME Shell window-introspection API may be denied by the session, so Shellby uses AT-SPI window enumeration on Linux. Input permissions depend on your distro's `/dev/uinput` and desktop session configuration. Without a working backend, an action reports a failure rather than success. Computer Use controls the shared desktop across agents; coordinate desktop actions in the parent conversation.
+
+### Cloudflare Tunnel instead of ngrok
+
+Create a dedicated remotely managed Cloudflare Tunnel and public hostname, such as `shellby.example.com`. Set its HTTP service to `http://127.0.0.1:3334` when Shellby's MCP port is 3333; the protected origin port is always the MCP port plus one. Install `cloudflared` and save the tunnel connector token outside this repository in an owner-only file (`chmod 600`). In `.shellby/config.toml`:
+
+```toml
+[ngrok]
+enabled = false
+
+[cloudflared]
+enabled = true
+public_url = "https://shellby.example.com"
+token_file = "~/.shellby/cloudflared-token"
+```
+
+Run `npm run setup` and `npm start`. Shellby manages `cloudflared` through PM2. Run `npm run print-url` **in your local terminal** to get the full private MCP URL, then enter that exact URL as a ChatGPT Web Developer Mode custom MCP app with **No Auth**. The URL contains a generated 256-bit secret. Keep it private; do not paste it into issues, logs, or chats. The Cloudflare origin listener returns 404 for every other path and adds the trusted remote marker only after the secret path matches. Remote tool calls still require the OpenAI subject binding. The ordinary MCP port and CDP port remain loopback-only. Configure the Cloudflare public hostname solely to this protected origin port; do not route it to port 3333 or expose other ports. `npm run restart`, `npm run status`, `npm run logs`, and `npm run stop` include the managed connector. To rotate the secret, stop Shellby, remove `<state_dir>/cloudflared-url-secret`, start again, and update the ChatGPT connector URL. A new tunnel needs a Cloudflare account login and its connector token before public validation; no account token is stored in the repository.
+
+### macOS manual install
 
 > [!TIP]
 > The manual install process should be ran from Terminal.app for the best macOS permission context.
@@ -98,7 +144,7 @@ Google Chrome is optional and is used for browser-backed subagents. Computer Use
 6. In ChatGPT Developer Mode, create a custom MCP app with the printed `https://.../mcp` URL and select **No Auth**.
 
 > [!IMPORTANT]
-> The first trusted remote tool call binds the installation to that ChatGPT subject. Use `npm run auth:reset` only when you intend to clear that binding.
+> The first trusted remote tool call binds the installation to that ChatGPT subject. Run `npm run auth:add` to let one more ChatGPT account bind on its next tool call; every bound account gets full access to this machine. Use `npm run auth:reset` only when you intend to clear all bindings.
 
 ### Verify the installation
 
@@ -160,7 +206,8 @@ See [Browser ChatGPT Subagents](wiki/pages/subagents/browser-chatgpt-subagents.m
 | `npm run pm2 -- <args>` | Run a PM2 command against Shellby's dedicated daemon.                          |
 | `npm run print-url`    | Print the active public `/mcp` URL.                                            |
 | `npm run stop`         | Stop the managed Shellby MCP and ngrok processes.                              |
-| `npm run auth:reset`   | Clear the bound remote ChatGPT subject after confirmation.                     |
+| `npm run auth:add`     | Let one more ChatGPT account bind on its next tool call, after confirmation.   |
+| `npm run auth:reset`   | Clear every bound remote ChatGPT subject after confirmation.                   |
 | `npm run reset-agents` | Forget persisted subagent conversation mappings.                               |
 
 PM2 is installed as a repository dependency. All Shellby PM2 commands use `<state_dir>/pm2` for their daemon, sockets, logs, and process state. `state_dir` defaults to `~/.shellby`. This is separate from the default `~/.pm2` daemon used by other projects; use `npm run pm2 -- <args>` for direct access to Shellby's daemon.
@@ -304,7 +351,7 @@ More startup and recovery details are in [Configuration and Startup](wiki/pages/
 
 - The checked-in ngrok traffic policy exposes the local MCP endpoint to ChatGPT.
 - Direct localhost MCP access is unauthenticated. Do not expose the local endpoint through another untrusted proxy.
-- Trusted remote tool calls are bound to the first ChatGPT subject stored in `<state_dir>/auth.json`.
+- Trusted remote tool calls are limited to the ChatGPT subjects stored in `<state_dir>/auth.json`: the first caller, plus one account per `npm run auth:add`.
 - The dedicated authenticated Chrome profile is part of the trust boundary for browser subagents.
 - `agent-commands.yaml` can contain sensitive tool inputs. It is gitignored and permission-restricted and should be treated as private.
 
