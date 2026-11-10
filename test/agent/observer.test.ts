@@ -6,7 +6,12 @@ import { createAgentObserver } from "../../src/agent/observer.js"
 test("tracks current and recent tool activity for one agent", () => {
   let timestamp = 1_000
   const observer = createAgentObserver(() => timestamp)
-  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", taskSlug: "dashboard" }
+  const agent: AgentIdentity = {
+    sessionId: "session-a",
+    agent: "agent-1",
+    provider: "chatgpt",
+    taskSlug: "dashboard",
+  }
 
   const callId = observer.startTool(agent, "shell_run", { command: "npm test" })
   assert.ok(callId)
@@ -31,7 +36,12 @@ test("tracks current and recent tool activity for one agent", () => {
 test("queues and delivers steering instructions once", () => {
   let timestamp = 2_000
   const observer = createAgentObserver(() => timestamp)
-  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", taskSlug: "dashboard" }
+  const agent: AgentIdentity = {
+    sessionId: "session-a",
+    agent: "agent-1",
+    provider: "chatgpt",
+    taskSlug: "dashboard",
+  }
 
   observer.startTool(agent, "shell_run", { command: "npm test" })
   const instruction = observer.queueInstruction("agent-1", " Focus only on the dashboard. ")
@@ -47,7 +57,7 @@ test("queues and delivers steering instructions once", () => {
 
 test("cancels queued steering instructions before delivery", () => {
   const observer = createAgentObserver()
-  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1" }
+  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", provider: "chatgpt" }
 
   observer.startTool(agent, "shell_run", { command: "pwd" })
   const instruction = observer.queueInstruction("agent-1", "Do not run tests")
@@ -59,7 +69,7 @@ test("cancels queued steering instructions before delivery", () => {
 
 test("does not cancel an instruction after it is delivered", () => {
   const observer = createAgentObserver()
-  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1" }
+  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", provider: "chatgpt" }
 
   observer.startTool(agent, "shell_run", { command: "pwd" })
   const instruction = observer.queueInstruction("agent-1", "Keep going")
@@ -70,8 +80,8 @@ test("does not cancel an instruction after it is delivered", () => {
 
 test("keeps steering instructions scoped to the intended agent", () => {
   const observer = createAgentObserver()
-  const first: AgentIdentity = { sessionId: "session-a", agent: "agent-1" }
-  const second: AgentIdentity = { sessionId: "session-b", agent: "agent-2" }
+  const first: AgentIdentity = { sessionId: "session-a", agent: "agent-1", provider: "chatgpt" }
+  const second: AgentIdentity = { sessionId: "session-b", agent: "agent-2", provider: "chatgpt" }
 
   observer.startTool(first, "shell_run", { command: "pwd" })
   observer.startTool(second, "shell_run", { command: "pwd" })
@@ -83,7 +93,7 @@ test("keeps steering instructions scoped to the intended agent", () => {
 
 test("emits snapshots when agent state changes", () => {
   const observer = createAgentObserver()
-  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1" }
+  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", provider: "chatgpt" }
   const events: string[] = []
   const unsubscribe = observer.subscribe((event) => events.push(`${event.type}:${event.agent.id}`))
 
@@ -97,7 +107,7 @@ test("emits snapshots when agent state changes", () => {
 test("keeps concurrent tool calls from the same agent", () => {
   let timestamp = 3_000
   const observer = createAgentObserver(() => timestamp)
-  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1" }
+  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", provider: "chatgpt" }
 
   const first = observer.startTool(agent, "shell_run", { command: "npm test" })
   timestamp = 3_100
@@ -120,7 +130,12 @@ test("keeps concurrent tool calls from the same agent", () => {
 
 test("claims pending instructions for chat delivery and returns them on failure", () => {
   const observer = createAgentObserver(() => 3_000)
-  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", taskSlug: "dashboard" }
+  const agent: AgentIdentity = {
+    sessionId: "session-a",
+    agent: "agent-1",
+    provider: "chatgpt",
+    taskSlug: "dashboard",
+  }
   const callId = observer.startTool(agent, "shell_run", { command: "npm test" })
   observer.queueInstruction("agent-1", "first")
   observer.queueInstruction("agent-1", "second")
@@ -128,6 +143,7 @@ test("claims pending instructions for chat delivery and returns them on failure"
   observer.finishTool(agent, callId)
   assert.deepEqual(observer.chatDeliveryTarget("agent-1"), {
     marker: agentChatMarker("session-a"),
+    provider: "chatgpt",
     busy: false,
     pending: true,
   })

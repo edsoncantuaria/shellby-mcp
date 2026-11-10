@@ -15,6 +15,9 @@ import { CursorHostManager } from "./tools/computer/cursor-host.js"
 import { PeekabooClient } from "./tools/computer/peekaboo.js"
 import { PeekabooXClient } from "./tools/computer/peekaboox.js"
 import { createChatGptDelegationService } from "./tools/delegation/chatgpt-service.js"
+import { createDelegationRouter } from "./tools/delegation/delegation-router.js"
+import { createGeminiTabs } from "./tools/delegation/gemini-browser.js"
+import { createGeminiDelegationService } from "./tools/delegation/gemini-service.js"
 import { ExternalMcpManager } from "./tools/external-mcp/external-mcp-manager.js"
 import { createShellSession } from "./tools/shell/session.js"
 import { createShellSessionManager } from "./tools/shell/session-manager.js"
@@ -29,14 +32,6 @@ const auditLogger = new McpAuditLogger(auditLogPath)
 const agentObserver = MCP_CONFIG.ui.enabled ? createAgentObserver() : undefined
 const authStore = new ShellbyAuthStore(join(MCP_CONFIG.stateDir, "auth.json"))
 await authStore.ensureState()
-const chatGptDelegation =
-  MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents
-    ? createChatGptDelegationService()
-    : undefined
-const chatDelivery =
-  agentObserver && chatGptDelegation
-    ? createChatDelivery(agentObserver, chatGptDelegation)
-    : undefined
 const computerBackend = MCP_CONFIG.tools.computer ? MCP_CONFIG.computerBackend : undefined
 const peekaboo =
   computerBackend === "peekaboo" ? new PeekabooClient({ localOnly: true }) : undefined
@@ -53,6 +48,17 @@ const browserBridge = MCP_CONFIG.tools.browser
       allowedOrigin: MCP_CONFIG.browserBridge.extensionOrigin,
     })
   : undefined
+const chatGptAgents =
+  MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents
+    ? createChatGptDelegationService()
+    : undefined
+const chatGptDelegation =
+  chatGptAgents &&
+  createDelegationRouter(chatGptAgents, createGeminiDelegationService(createGeminiTabs()))
+const chatDelivery =
+  agentObserver && chatGptDelegation
+    ? createChatDelivery(agentObserver, chatGptDelegation)
+    : undefined
 const cursorHost =
   peekaboo && process.platform === "darwin"
     ? new CursorHostManager({ executable: MCP_CONFIG.peekaboo.cursorHostExecutable })

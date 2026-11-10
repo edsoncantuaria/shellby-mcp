@@ -7,4 +7,5 @@ summary: "Browser delegation internals: ownership, completion/recovery, and priv
 
 - [Browser ChatGPT Subagents](./browser-chatgpt-subagents.md) — Delegation ownership, capacity, persistence, page restoration, and at-most-once submission.
 - [ChatGPT CDP Transport](./chatgpt-cdp-transport.md) — Private HTTP/WebSocket acquisition and diagnostic probes for ChatGPT transport drift.
+- [Gemini Browser Subagents](./gemini-browser-subagents.md) — Gemini subagents and steering in the dedicated Chrome, and what differs from ChatGPT.
 - [Subagent Completion](./subagent-completion.md) — Completion authority, bounded history recovery, uncertain agents, and restart/event semantics.

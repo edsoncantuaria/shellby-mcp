@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { getAgentIdentity } from "../../agent/context.js"
 import type { ToolRegistrar } from "../../mcp/tool-registration-boundary.js"
 import type { PeekabooClient, PeekabooObservationTarget } from "./peekaboo.js"
 import { SCREEN_IMAGE_META_KEY, SCREEN_VIEWER_URI } from "./screen-viewer.js"
@@ -46,6 +47,15 @@ export function registerGnomeTools(registerTool: ToolRegistrar, peekaboo: Peekab
           { target, annotate: false, noWebFocus: true },
           ctx.mcpReq.signal
         )
+        // Only ChatGPT runs the viewer widget; other clients get a standard MCP image.
+        if (getAgentIdentity()?.provider === "gemini") {
+          return {
+            content: [
+              { type: "image" as const, data: imageData, mimeType },
+              { type: "text" as const, text: "Screenshot of the user's desktop." },
+            ],
+          }
+        }
         return {
           content: [{ type: "text" as const, text: "The screenshot is displayed to the user." }],
           _meta: { [SCREEN_IMAGE_META_KEY]: `data:${mimeType};base64,${imageData}` },

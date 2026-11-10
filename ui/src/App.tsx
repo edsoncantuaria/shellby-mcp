@@ -5,6 +5,12 @@ import { Button } from "./components/ui/button"
 import { RoomEditor } from "./features/agent-room/editor/RoomEditor"
 import { AgentCard } from "./features/dashboard/AgentCard"
 import { useAgents } from "./hooks/useAgents"
+import type { Agent, AgentProvider } from "./types"
+
+const PROVIDERS: ReadonlyArray<{ id: AgentProvider; label: string }> = [
+  { id: "chatgpt", label: "ChatGPT" },
+  { id: "gemini", label: "Gemini" },
+]
 
 export function App() {
   const editorRoute =
@@ -83,13 +89,45 @@ function Dashboard() {
             </p>
           </div>
         ) : (
-          <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {agents.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} now={now} />
+          <div className="space-y-8">
+            {PROVIDERS.map(({ id, label }) => (
+              <ProviderSection
+                key={id}
+                label={label}
+                agents={agents.filter((agent) => agent.provider === id)}
+                now={now}
+              />
             ))}
           </div>
         )}
       </div>
     </main>
+  )
+}
+
+function ProviderSection({
+  label,
+  agents,
+  now,
+}: {
+  label: string
+  agents: Agent[]
+  now: number
+}) {
+  return (
+    <section aria-label={label}>
+      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        {label} · {agents.length}
+      </h2>
+      {agents.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No {label} agents observed yet.</p>
+      ) : (
+        <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {agents.map((agent) => (
+            <AgentCard key={agent.id} agent={agent} now={now} />
+          ))}
+        </div>
+      )}
+    </section>
   )
 }

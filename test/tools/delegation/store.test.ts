@@ -11,8 +11,16 @@ import { createDelegationStore, DelegationStoreError } from "../../../src/tools/
 test("persists subagent conversation state across store reopen", () => {
   const directory = mkdtempSync(join(tmpdir(), "shellby-subagents-"))
   const path = join(directory, "subagents.sqlite")
-  const mainA: AgentIdentity = { sessionId: "main-session-a", agent: "agent-1" }
-  const mainB: AgentIdentity = { sessionId: "main-session-b", agent: "agent-2" }
+  const mainA: AgentIdentity = {
+    sessionId: "main-session-a",
+    agent: "agent-1",
+    provider: "chatgpt",
+  }
+  const mainB: AgentIdentity = {
+    sessionId: "main-session-b",
+    agent: "agent-2",
+    provider: "chatgpt",
+  }
   try {
     const first = createDelegationStore(path)
     assert.equal(first.status, "available")
