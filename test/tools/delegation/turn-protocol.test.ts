@@ -137,6 +137,24 @@ test("HTTP SSE tracker reconstructs the same final assistant response", () => {
   })
 })
 
+test("HTTP SSE tracker applies a patch batch that omits its operation after an earlier patch", () => {
+  const tracker = new ChatGptTurnTracker("prompt")
+  const stream = [
+    message("user", "prompt", { conversationId: "conversation-1" }),
+    message("assistant", "", { status: "in_progress", endTurn: false }),
+    'event: delta\ndata: {"o":"patch","v":[{"p":"/message/content/parts/0","o":"append","v":"PRO"},{"p":"/message/end_turn","o":"replace","v":null},{"p":"/message/metadata","o":"append","v":{"model_slug":"m"}}]}\n\n',
+    'event: delta\ndata: {"v":[{"p":"/message/content/parts/0","o":"append","v":"BE_OK"},{"p":"/message/metadata/constants","o":"append","v":{"0":"PROBE_OK"}}]}\n\n',
+    'event: delta\ndata: {"v":[{"p":"/message/status","o":"replace","v":"finished_successfully"},{"p":"/message/end_turn","o":"replace","v":true},{"p":"/message/metadata","o":"append","v":{"is_complete":true}}]}\n\n',
+    'data: {"type":"message_stream_complete","conversation_id":"conversation-1"}\n\n',
+  ].join("")
+
+  assert.deepEqual(tracker.ingestSse(stream), {
+    text: "PROBE_OK",
+    conversationId: "conversation-1",
+    turnId: undefined,
+  })
+})
+
 test("HTTP SSE tracker counts bound heartbeats and safety review updates as activity without changing the status label", () => {
   const activities: Array<string | undefined> = []
   const tracker = new ChatGptTurnTracker("review", (activity) => activities.push(activity))

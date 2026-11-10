@@ -9,7 +9,8 @@ const COMPOSER_SELECTORS = [
   '[data-testid="prompt-textarea"]',
   '[contenteditable="true"][aria-label*="Chat with ChatGPT" i]',
   '[contenteditable="true"][aria-label*="Ask ChatGPT" i]',
-  'textarea[placeholder*="Ask ChatGPT" i]:not(.wcDTda_fallbackTextarea)',
+  // The pre-hydration placeholder textarea is replaced by the real editor moments after load.
+  'textarea[placeholder*="Ask ChatGPT" i]:not(.wcDTda_fallbackTextarea):not(#pending-home-input)',
 ] as const
 
 const LATEST_FORKABLE_TURN_SELECTOR =

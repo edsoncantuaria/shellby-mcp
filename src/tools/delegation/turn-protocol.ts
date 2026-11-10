@@ -25,6 +25,7 @@ export class ChatGptTurnTracker {
   private assistant?: NormalizedMessage
   private lastDeltaPath?: string
   private lastDeltaOperation?: string
+  private patchContinues = false
   private complete = false
 
   constructor(
@@ -97,6 +98,7 @@ export class ChatGptTurnTracker {
         this.assistant = { ...message }
         this.lastDeltaPath = undefined
         this.lastDeltaOperation = undefined
+        this.patchContinues = false
       }
 
       this.applyDelta(record)
@@ -131,14 +133,20 @@ export class ChatGptTurnTracker {
     this.onConversationId?.(conversationId)
   }
 
-  private applyDelta(delta: Record<string, unknown>): void {
+  private applyDelta(delta: Record<string, unknown>, nested = false): void {
     if (!this.assistant) return
     const explicitOperation = stringValue(delta.o)
-    const operation = explicitOperation ? explicitOperation : this.lastDeltaOperation
+    let operation = explicitOperation ? explicitOperation : this.lastDeltaOperation
+    if (!nested) {
+      // An event that omits "o" after a patch batch is another patch batch; the
+      // operations nested inside the previous batch do not replace that default.
+      if (explicitOperation) this.patchContinues = explicitOperation === "patch"
+      else if (this.patchContinues && Array.isArray(delta.v)) operation = "patch"
+    }
     if (operation === "patch" && Array.isArray(delta.v)) {
-      for (const nested of delta.v) {
-        const record = asRecord(nested)
-        if (record) this.applyDelta(record)
+      for (const item of delta.v) {
+        const record = asRecord(item)
+        if (record) this.applyDelta(record, true)
       }
       return
     }

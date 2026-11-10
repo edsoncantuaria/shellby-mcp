@@ -13,11 +13,11 @@ const stop = process.argv.includes("--stop")
 const endpoint = new URL(MCP_CONFIG.chatGpt.cdpEndpoint)
 const profileDir = join(MCP_CONFIG.stateDir, "chatgpt-chrome")
 const markerPath = join(profileDir, ".configured")
-const mobileUserAgent =
-  "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
-const mobileWindowSize = "430,900"
+// Chrome's own desktop user agent keeps ChatGPT on the web app whose turn protocol
+// Shellby observes; a mobile user agent is served a different mobile-web surface.
+const compactWindowSize = "430,900"
 const configured = await exists(markerPath)
-const cdpReady = await isCdpReady(endpoint)
+let cdpReady = await isCdpReady(endpoint)
 if (stop) {
   const pid = findManagedChromePid()
   if (pid) {
@@ -30,6 +30,17 @@ if (stop) {
 if (!isLocalEndpoint(endpoint)) {
   console.log(`ChatGPT browser: using configured CDP endpoint ${endpoint.href}`)
   process.exit(0)
+}
+
+const outdatedChrome = cdpReady ? findManagedChrome() : undefined
+if (outdatedChrome?.command.includes(" --user-agent=")) {
+  // Started by an older Shellby with the mobile user agent: relaunch it below.
+  process.kill(outdatedChrome.pid, "SIGTERM")
+  if (await isPortStillOccupied(endpoint)) {
+    fail("Shellby Chrome did not stop for its relaunch. Close it and retry.")
+  }
+  console.log("ChatGPT browser: relaunching without the mobile user agent")
+  cdpReady = false
 }
 
 if (cdpReady && !findManagedChromePid()) {
@@ -92,8 +103,7 @@ const child = spawn(
       ? ["--ozone-platform=wayland"]
       : []),
     `--user-data-dir=${profileDir}`,
-    `--user-agent=${mobileUserAgent}`,
-    `--window-size=${mobileWindowSize}`,
+    `--window-size=${compactWindowSize}`,
     "--force-dark-mode", // Enables dark mode for Chrome UI
     "--enable-features=WebUIDarkMode", // Enables WebUI dark mode flag
     "--disable-extensions",
@@ -220,6 +230,10 @@ function showManagedChrome() {
 }
 
 function findManagedChromePid() {
+  return findManagedChrome()?.pid
+}
+
+function findManagedChrome() {
   const result = spawnSync("/bin/ps", ["-eo", "pid=,args="], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
@@ -232,7 +246,7 @@ function findManagedChromePid() {
     const command = `${line} `
     if (!command.includes(` ${profileArg} `) || !command.includes(` ${portArg} `)) continue
     const match = line.trim().match(/^(\d+)\s/u)
-    if (match) return Number(match[1])
+    if (match) return { pid: Number(match[1]), command }
   }
 }
 
