@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
+import { createChatDelivery } from "./agent/chat-delivery.js"
 import { createAgentObserver } from "./agent/observer.js"
 import { ShellbyAuthStore } from "./auth/store.js"
 import { MCP_CONFIG } from "./config.js"
@@ -28,6 +29,10 @@ await authStore.ensureState()
 const chatGptDelegation =
   MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents
     ? createChatGptDelegationService()
+    : undefined
+const chatDelivery =
+  agentObserver && chatGptDelegation
+    ? createChatDelivery(agentObserver, chatGptDelegation)
     : undefined
 const computerBackend = MCP_CONFIG.tools.computer ? MCP_CONFIG.computerBackend : undefined
 const peekaboo =
@@ -61,6 +66,7 @@ try {
     auditLogger,
     authStore,
     agentObserver,
+    chatDelivery,
   })
 } catch (error) {
   log("fatal", "server.startup_failed", { err: error })

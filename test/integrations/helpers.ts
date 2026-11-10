@@ -108,6 +108,7 @@ function createUnavailableDelegationService(): NonNullable<
     poll: unavailable,
     ensureProject: () => Promise.reject(new Error("not used in this test")),
     drainEvents: () => [],
+    deliverToAgentChat: async () => "missing" as const,
     dispose: async () => {},
   }
 }

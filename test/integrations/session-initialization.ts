@@ -15,6 +15,12 @@ import {
 } from "../../src/tools/start-here/start-here.js"
 import { connectClient, startMcpHttpServer, toolText } from "./helpers.js"
 
+const CHAT_MARKER_RE = /\n*Internal conversation marker, ignore it: shellby-agent:[0-9a-f]{16}$/u
+
+function withoutChatMarker(result: Parameters<typeof toolText>[0]): string {
+  return toolText(result).replace(CHAT_MARKER_RE, "")
+}
+
 test("requires start_here once per ChatGPT session", { timeout: 10_000 }, async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), "shellby-start-here-"))
   t.after(() => rm(workspace, { recursive: true, force: true }))
@@ -50,7 +56,8 @@ test("requires start_here once per ChatGPT session", { timeout: 10_000 }, async 
     arguments: { mode: "coding", task_id: "startup-session" },
   })
   assert.equal(started.isError, undefined)
-  const startInstructions = toolText(started)
+  assert.match(toolText(started), CHAT_MARKER_RE)
+  const startInstructions = withoutChatMarker(started)
   const [sharedPrompt, codingPrompt] = await Promise.all([
     readStartPrompt("shared"),
     readStartPrompt("coding"),
@@ -103,7 +110,7 @@ test("suppresses duplicate start_here modes for five seconds per agent", {
     }),
   ])
   assert.ok(simultaneous.every((result) => !result.isError))
-  const simultaneousText = simultaneous.map(toolText)
+  const simultaneousText = simultaneous.map(withoutChatMarker)
   assert.equal(simultaneousText.filter((text) => text === codingInstructions).length, 1)
   assert.equal(
     simultaneousText.filter((text) => /loaded recently by this agent/u.test(text)).length,
@@ -125,19 +132,19 @@ test("suppresses duplicate start_here modes for five seconds per agent", {
     name: "start_here",
     arguments: { mode: "general", task_id: "general-task" },
   })
-  assert.equal(toolText(otherMode), await buildStartHereInstructions("general"))
+  assert.equal(withoutChatMarker(otherMode), await buildStartHereInstructions("general"))
   const otherAgent = await second.client.callTool({
     name: "start_here",
     arguments: { mode: "coding", task_id: "other-task" },
   })
-  assert.equal(toolText(otherAgent), codingInstructions)
+  assert.equal(withoutChatMarker(otherAgent), codingInstructions)
 
   now += 1
   const expired = await first.client.callTool({
     name: "start_here",
     arguments: { mode: "coding", task_id: "after-cooldown" },
   })
-  assert.equal(toolText(expired), codingInstructions)
+  assert.equal(withoutChatMarker(expired), codingInstructions)
 })
 
 test("suppresses rapid duplicate skill loads for the same agent", {
@@ -277,7 +284,7 @@ test("keeps a ChatGPT session locked when start_here fails", { timeout: 10_000 }
     name: "start_here",
     arguments: { mode: "coding", task_id: "retry-startup" },
   })
-  assert.equal(toolText(retry), await buildStartHereInstructions("coding"))
+  assert.equal(withoutChatMarker(retry), await buildStartHereInstructions("coding"))
   const allowed = await connected.client.callTool({ name: "shell_list", arguments: {} })
   assert.equal(allowed.isError, undefined)
 })
@@ -299,6 +306,6 @@ test("does not require start_here when no ChatGPT session is provided", {
       name: "start_here",
       arguments: { mode: "coding", task_id: "local-startup" },
     })
-    assert.equal(toolText(started), instructions)
+    assert.equal(withoutChatMarker(started), instructions)
   }
 })

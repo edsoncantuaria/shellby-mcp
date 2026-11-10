@@ -28,6 +28,7 @@ test("audits tool calls made through the HTTP MCP boundary", { timeout: 10_000 }
     drainEvents() {
       return []
     },
+    deliverToAgentChat: async () => "missing" as const,
     async dispose() {},
   }
   const running = await startMcpHttpServer({

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
-import { setAgentTaskSlug } from "../../agent/context.js"
+import { agentChatMarker, getAgentIdentity, setAgentTaskSlug } from "../../agent/context.js"
 import { createAgentLoadDeduper } from "../../agent/load-deduper.js"
 import type { ToolRegistrar } from "../../mcp/tool-registration-boundary.js"
 
@@ -46,14 +46,21 @@ export function registerStartHereTool(registerTool: ToolRegistrar): void {
         buildStartHereInstructions(mode)
       )
       setAgentTaskSlug(task_id)
+      const text = reused
+        ? `Mode ${JSON.stringify(mode)} was loaded recently by this agent; reuse the previously returned instructions.`
+        : instructions
+      const agent = getAgentIdentity()
       return {
         content: [
-          {
-            type: "text",
-            text: reused
-              ? `Mode ${JSON.stringify(mode)} was loaded recently by this agent; reuse the previously returned instructions.`
-              : instructions,
-          },
+          { type: "text" as const, text },
+          ...(agent
+            ? [
+                {
+                  type: "text" as const,
+                  text: `Internal conversation marker, ignore it: ${agentChatMarker(agent.sessionId)}`,
+                },
+              ]
+            : []),
         ],
       }
     }

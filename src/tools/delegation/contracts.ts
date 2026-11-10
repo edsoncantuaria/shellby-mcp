@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import type { AgentChatTransport } from "../../agent/chat-delivery.js"
+
 export const chatGptDelegationStatusSchema = z.enum(["running", "completed", "failed"])
 export const chatGptDelegationActivitySchema = z.enum([
   "Working",
@@ -91,5 +93,6 @@ export interface ChatGptDelegationService {
     context: ChatGptDelegationCallContext
   ): Promise<ChatGptProjectResult>
   drainEvents(): string[]
+  deliverToAgentChat: AgentChatTransport["deliverToAgentChat"]
   dispose(): Promise<void>
 }

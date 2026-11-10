@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import type { AgentIdentity } from "../../src/agent/context.js"
+import { type AgentIdentity, agentChatMarker } from "../../src/agent/context.js"
 import { createAgentObserver } from "../../src/agent/observer.js"
 
 test("tracks current and recent tool activity for one agent", () => {
@@ -116,4 +116,36 @@ test("keeps concurrent tool calls from the same agent", () => {
     snapshot?.recent.map((call) => call.id),
     [first, second]
   )
+})
+
+test("claims pending instructions for chat delivery and returns them on failure", () => {
+  const observer = createAgentObserver(() => 3_000)
+  const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", taskSlug: "dashboard" }
+  const callId = observer.startTool(agent, "shell_run", { command: "npm test" })
+  observer.queueInstruction("agent-1", "first")
+  observer.queueInstruction("agent-1", "second")
+  assert.equal(observer.chatDeliveryTarget("agent-1")?.busy, true)
+  observer.finishTool(agent, callId)
+  assert.deepEqual(observer.chatDeliveryTarget("agent-1"), {
+    marker: agentChatMarker("session-a"),
+    busy: false,
+    pending: true,
+  })
+
+  const claimed = observer.claimInstructions("agent-1")
+  assert.deepEqual(
+    claimed.map((instruction) => instruction.message),
+    ["first", "second"]
+  )
+  assert.equal(observer.chatDeliveryTarget("agent-1")?.pending, false)
+  assert.deepEqual(observer.drainInstructions(agent), [])
+
+  observer.releaseInstructions(
+    "agent-1",
+    claimed.map((instruction) => instruction.id)
+  )
+  assert.deepEqual(observer.drainInstructions(agent), [
+    "Human instruction: first",
+    "Human instruction: second",
+  ])
 })
