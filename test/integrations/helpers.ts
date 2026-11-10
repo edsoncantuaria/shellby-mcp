@@ -39,6 +39,7 @@ const TEST_TOOLS = {
   skills: true,
   image: true,
   computer: true,
+  browser: false,
 } satisfies McpRuntimeProfileOverrides["tools"]
 
 export async function startMcpHttpServer(options: TestMcpServerOptions = {}) {

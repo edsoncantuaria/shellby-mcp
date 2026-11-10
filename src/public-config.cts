@@ -78,6 +78,7 @@ const publicConfigSchema = z.object({
     skills: z.boolean().default(true),
     image: z.boolean().default(true),
     computer: z.boolean().default(process.platform === "darwin"),
+    browser: z.boolean().default(false),
   }),
 })
 

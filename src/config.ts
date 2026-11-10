@@ -101,6 +101,13 @@ export const MCP_CONFIG = {
     originPort: publicConfig.port + 1,
     secretFile: join(resolveConfiguredPath(publicConfig.state_dir), "cloudflared-url-secret"),
   },
+  /** Loopback channel to the Chrome extension; deliberately not the tunnel-exposed MCP port. */
+  browserBridge: {
+    port: publicConfig.port + 2,
+    secretFile: join(resolveConfiguredPath(publicConfig.state_dir), "browser-bridge-secret"),
+    /** Derived from the public key in browser-extension/manifest.json. */
+    extensionOrigin: "chrome-extension://imiljcaggcldkibobmlfmmmhfoofbfno",
+  },
   /** Remote authentication settings. */
   auth: {
     mode: publicConfig.auth.mode,
@@ -195,6 +202,8 @@ export const MCP_CONFIG = {
     image: publicConfig.tools.image,
     /** Enables platform-specific computer-control tools. */
     computer: publicConfig.tools.computer,
+    /** Enables tools that drive the user's Chrome through the paired extension. */
+    browser: publicConfig.tools.browser,
   },
 }
 

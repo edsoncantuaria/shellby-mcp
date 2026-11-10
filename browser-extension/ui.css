@@ -1,0 +1,42 @@
+:root {
+  color-scheme: light dark;
+  font:
+    14px / 1.4 system-ui,
+    sans-serif;
+}
+
+body {
+  margin: 16px;
+  min-width: 300px;
+}
+
+h1 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+h2 {
+  font-size: 14px;
+  margin: 16px 0 4px;
+}
+
+label {
+  display: block;
+  margin-bottom: 4px;
+}
+
+input {
+  box-sizing: border-box;
+  margin-bottom: 8px;
+  width: 100%;
+}
+
+ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+#pair-error {
+  color: #c62828;
+  margin: 4px 0 8px;
+}
