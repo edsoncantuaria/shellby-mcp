@@ -20,6 +20,23 @@ const cdpEndpoint = httpUrl.refine((value) => {
   return managedLocal && url.port.length > 0
 }, "CDP endpoint must use http://127.0.0.1:<port> or http://localhost:<port>")
 
+const externalMcpServerName = z.string().regex(/^[a-z0-9][a-z0-9_-]*$/u)
+const stdioMcpServer = z.strictObject({
+  command: z.string().trim().min(1),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().trim().min(1).optional(),
+  env: z.record(z.string(), z.string()).default({}),
+})
+// Plain HTTP would expose the OAuth token, so it is limited to servers on this machine.
+const remoteMcpServer = z.strictObject({
+  url: httpUrl.refine((value) => {
+    const url = new URL(value)
+    return url.protocol === "https:" || ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+  }, "Remote MCP servers must use HTTPS unless they run on this machine"),
+})
+const externalMcpServer = z.union([stdioMcpServer, remoteMcpServer])
+type ExternalMcpServer = z.infer<typeof externalMcpServer>
+
 const publicConfigSchema = z.object({
   state_dir: z.string().trim().min(1).default("~/.shellby"),
   port: z.number().int().min(1).max(65535).default(3333),
@@ -79,6 +96,11 @@ const publicConfigSchema = z.object({
     image: z.boolean().default(true),
     computer: z.boolean().default(process.platform === "darwin"),
   }),
+  external_mcp: z.record(externalMcpServerName, externalMcpServer).default({}),
+  claude_mcp: z.object({
+    enabled: z.boolean().default(false),
+    exclude: z.array(z.string()).default([]),
+  }),
 })
 
 export type ShellbyPublicConfig = z.infer<typeof publicConfigSchema>
@@ -123,6 +145,58 @@ export function loadPublicConfig(path = defaultConfigPath): ShellbyPublicConfig 
     )
   }
   return config
+}
+
+/**
+ * Read the user-scope MCP servers from Claude Code's settings file.
+ *
+ * An unreadable file or unusable entry only warns, so Claude's settings cannot stop Shellby from
+ * starting. Warnings carry server names alone because these entries can hold credentials.
+ */
+export function readClaudeMcpServers(
+  path: string,
+  exclude: readonly string[]
+): Record<string, ExternalMcpServer> {
+  const warn = (message: string) => console.warn(`Claude MCP import (${path}): ${message}`)
+
+  let settings: unknown
+  try {
+    settings = JSON.parse(readFileSync(path, "utf8"))
+  } catch (error) {
+    // JSON syntax errors quote the surrounding file content, so never forward their message.
+    const reason =
+      error instanceof Error && !(error instanceof SyntaxError) ? error.message : "invalid JSON"
+    warn(`cannot read this file (${reason}); importing no servers.`)
+    return {}
+  }
+
+  const declared = isRecord(settings) ? settings.mcpServers : undefined
+  if (!isRecord(declared)) return {}
+
+  const servers: Record<string, ExternalMcpServer> = {}
+  for (const [name, entry] of Object.entries(declared)) {
+    if (exclude.includes(name)) continue
+    const server = isRecord(entry) ? parseClaudeMcpServer(entry) : undefined
+    if (!externalMcpServerName.safeParse(name).success || !server) {
+      warn(`skipping "${name}": unsupported server name, transport, or settings.`)
+      continue
+    }
+    servers[name] = server
+  }
+  return servers
+}
+
+function parseClaudeMcpServer(entry: Record<string, unknown>): ExternalMcpServer | undefined {
+  // Static headers usually carry credentials this bridge does not manage, so those servers stay out.
+  if (entry.type === "http" && entry.headers === undefined)
+    return remoteMcpServer.safeParse({ url: entry.url }).data
+  if (entry.type !== undefined && entry.type !== "stdio") return undefined
+  return stdioMcpServer.safeParse({
+    command: entry.command,
+    args: entry.args,
+    cwd: entry.cwd,
+    env: entry.env,
+  }).data
 }
 
 function resolveConfigObject(

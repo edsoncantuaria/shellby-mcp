@@ -39,6 +39,7 @@ const TEST_TOOLS = {
   skills: true,
   image: true,
   computer: true,
+  externalMcp: false,
 } satisfies McpRuntimeProfileOverrides["tools"]
 
 export async function startMcpHttpServer(options: TestMcpServerOptions = {}) {
@@ -60,12 +61,14 @@ export async function startMcpHttpServer(options: TestMcpServerOptions = {}) {
     peekaboox: services.peekaboox,
     chatGptDelegation,
     webPageOpener: tools.web ? (services.webPageOpener ?? new WebPageOpener()) : undefined,
+    externalMcp: services.externalMcp,
   }
   const closeRuntime = () =>
     Promise.allSettled([
       shellManager?.close() ?? Promise.resolve(),
       peekaboo?.close() ?? Promise.resolve(),
       chatGptDelegation?.dispose() ?? Promise.resolve(),
+      services.externalMcp?.close() ?? Promise.resolve(),
     ])
 
   try {

@@ -1,5 +1,5 @@
 ---
-summary: "Capability contracts: shell, patching, file/image transfer, fetching, subagents, and clones."
+summary: "Capability contracts: shell, patching, file/image transfer, fetching, subagents, clones, and external MCP servers."
 ---
 # Tools
 
@@ -8,6 +8,7 @@ summary: "Capability contracts: shell, patching, file/image transfer, fetching, 
 - [apply_patch](./apply-patch.md) — Vendored patch execution, partial application, conservative summaries, and native quirks.
 - [Clones](./clones.md) — Conversation branching and clone reuse; differences from the shared subagent contract.
 - [fetch_url](./fetch-url.md) — Browser acquisition versus document retention, MIME conversion, cursor identity, and fetch errors.
+- [External MCP Bridge](./external-mcp.md) — Bridge to stdio and remote MCP servers: operator-declared servers, OAuth logins, shared lifetime, result limits, and failure semantics.
 - [Files and Images](./files-and-images.md) — Local binary transfer, ChatGPT file inputs, image encoding, and output/audit boundaries.
 - [shell_run / shell_poll](./shell-run.md) — Shell retry identity, batch isolation, streaming/polling, output loss, and state lifetime.
 - [subagent_run / subagent_result](./subagent.md) — Subagent caller contract: identity, temporary memory, polling, capacity, and failure guidance.

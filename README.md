@@ -268,6 +268,27 @@ image = true
 computer = false
 ```
 
+To reach other MCP servers, such as Blender, Godot, or Cloudflare, import the ones Claude Code already has or declare them under `external_mcp`. Having at least one publishes `mcp_list_tools` and `mcp_call` after Shellby restarts. Each local server starts on first use and receives only a safe default environment, the desktop session variables, and its `env`:
+
+```toml
+# Import the user-scope servers from ~/.claude.json.
+[claude_mcp]
+enabled = true
+exclude = ["whatsapp"]
+
+# Or declare one directly. This wins over an imported server of the same name.
+[external_mcp.godot]
+command = "/usr/bin/node"
+args = ["/path/to/godot-mcp/build/index.js"]
+env = { GODOT_PATH = "/path/to/godot" }
+
+# A remote server uses HTTPS and its own login.
+[external_mcp.cloudflare-api]
+url = "https://mcp.cloudflare.com/mcp"
+```
+
+If a remote server needs a login, run `npm run mcp:login -- <server>` on this machine and approve it in the browser. A running Shellby uses the login on its next call. Logins are not shared with Claude. A declared server can do anything its program allows, so list only servers you trust. See [External MCP Bridge](wiki/pages/tools/external-mcp.md).
+
 `chatgpt.max_delegated_agents` sets the maximum number of delegated agent IDs per main-agent session, shared by subagents and clones. It defaults to `3`; invalid values warn and fall back to `3`. Set a positive integer to override it. Saved agents and in-flight creations count toward the limit; existing IDs remain reusable even if the limit is lowered. The per-call batch limit remains three. Older configs can omit this field. To override it, add it under `[chatgpt]`, then restart Shellby after changing its value.
 
 `mcp.tool_output` controls the representation used for ordinary tool results. `compact` is optimized for model context and omits public output schemas; `structured` preserves each tool's structured result and output schema for MCP clients that use them. Computer Use and `image_view` keep their native MCP content in either mode. Changing this setting requires a Shellby restart.

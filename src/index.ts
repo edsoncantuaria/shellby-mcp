@@ -12,6 +12,7 @@ import { CursorHostManager } from "./tools/computer/cursor-host.js"
 import { PeekabooClient } from "./tools/computer/peekaboo.js"
 import { PeekabooXClient } from "./tools/computer/peekaboox.js"
 import { createChatGptDelegationService } from "./tools/delegation/chatgpt-service.js"
+import { ExternalMcpManager } from "./tools/external-mcp/external-mcp-manager.js"
 import { createShellSession } from "./tools/shell/session.js"
 import { createShellSessionManager } from "./tools/shell/session-manager.js"
 import { WebPageOpener } from "./tools/web/web-open.js"
@@ -34,6 +35,9 @@ const peekaboo =
   computerBackend === "peekaboo" ? new PeekabooClient({ localOnly: true }) : undefined
 const peekaboox = computerBackend === "peekaboox" ? new PeekabooXClient() : undefined
 const webPageOpener = MCP_CONFIG.tools.web ? new WebPageOpener() : undefined
+const externalMcp = MCP_CONFIG.tools.externalMcp
+  ? new ExternalMcpManager(MCP_CONFIG.externalMcp.servers)
+  : undefined
 const cursorHost =
   peekaboo && process.platform === "darwin"
     ? new CursorHostManager({ executable: MCP_CONFIG.peekaboo.cursorHostExecutable })
@@ -57,6 +61,7 @@ try {
       peekaboox,
       chatGptDelegation,
       webPageOpener,
+      externalMcp,
     }),
     auditLogger,
     authStore,
@@ -82,6 +87,7 @@ let computerStatus = "disabled"
 if (peekaboo) computerStatus = `enabled via Peekaboo CLI (${MCP_CONFIG.peekaboo.executable})`
 if (peekaboox) computerStatus = `enabled via PeekabooX (${MCP_CONFIG.peekaboox.executable})`
 console.log(`Computer Use: ${computerStatus}`)
+console.log(`External MCP servers: ${externalMcp?.serverNames.join(", ") ?? "none"}`)
 if (cursorHost) console.log(`Agent cursor: ${cursorHostStarted ? "enabled" : "disabled"}`)
 console.log(
   `ChatGPT agents: ${chatGptDelegation ? `enabled via attach-only CDP ${MCP_CONFIG.chatGpt.cdpEndpoint}` : "disabled"}`
@@ -106,6 +112,7 @@ async function closeRuntimeServices(): Promise<void> {
     ["peekaboo", peekaboo?.close()],
     ["delegation", chatGptDelegation?.dispose()],
     ["cursor", cursorHost?.close()],
+    ["external_mcp", externalMcp?.close()],
   ] as const
   const results = await Promise.allSettled(services.map(([, closing]) => closing))
   results.forEach((result, index) => {

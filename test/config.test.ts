@@ -91,6 +91,8 @@ test("loads and validates Shellby TOML config", async (t) => {
       skills: true,
       image: true,
     },
+    external_mcp: {},
+    claude_mcp: { enabled: false, exclude: [] },
   })
 })
 
@@ -159,6 +161,40 @@ test("loads older partial configs with silent defaults and preserves valid overr
 
   await writeFile(path, "# defaults only\n")
   assert.deepEqual(loadPublicConfig(path), DEFAULT_PUBLIC_CONFIG)
+})
+
+test("loads external MCP servers and warns about an invalid declaration", async (t) => {
+  const root = await tempDir(t, "shellby-config-external-mcp-")
+  const path = join(root, "config.toml")
+  const warning = t.mock.method(console, "warn", () => undefined)
+
+  await writeFile(
+    path,
+    '[external_mcp.godot]\ncommand = "node"\nargs = ["index.js"]\nenv = { GODOT_PATH = "/opt/godot" }\n'
+  )
+  assert.deepEqual(loadPublicConfig(path).external_mcp, {
+    godot: { command: "node", args: ["index.js"], env: { GODOT_PATH: "/opt/godot" } },
+  })
+  assert.equal(warning.mock.callCount(), 0)
+
+  await writeFile(path, '[external_mcp.cloudflare]\nurl = "https://mcp.example.test/mcp"\n')
+  assert.deepEqual(loadPublicConfig(path).external_mcp, {
+    cloudflare: { url: "https://mcp.example.test/mcp" },
+  })
+  assert.equal(warning.mock.callCount(), 0)
+
+  await writeFile(path, '[external_mcp.plain]\nurl = "http://mcp.example.test/mcp"\n')
+  assert.deepEqual(loadPublicConfig(path).external_mcp, {})
+  assert.equal(warning.mock.callCount(), 1)
+  warning.mock.resetCalls()
+
+  await writeFile(path, '[external_mcp."Not Valid"]\ncommand = "node"\n')
+  assert.deepEqual(loadPublicConfig(path).external_mcp, {})
+  assert.equal(warning.mock.callCount(), 1)
+
+  await writeFile(path, '[external_mcp.godot]\ncommand = "node"\nshell = true\n')
+  assert.deepEqual(loadPublicConfig(path).external_mcp, {})
+  assert.equal(warning.mock.callCount(), 2)
 })
 
 test("warns for invalid or unknown settings without discarding valid siblings", async (t) => {

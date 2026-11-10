@@ -5,7 +5,7 @@ import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
-import { loadPublicConfig } from "./public-config.cjs"
+import { loadPublicConfig, readClaudeMcpServers } from "./public-config.cjs"
 
 const packageMetadata = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8")
@@ -24,6 +24,25 @@ const gnomeDesktop =
 const linuxDesktopExecutable = fileURLToPath(new URL("../linux/shellby-desktop", import.meta.url))
 const publicConfig = loadPublicConfig()
 const rtkExecutable = resolvePathExecutable("rtk")
+const externalMcpServers = Object.fromEntries(
+  Object.entries({
+    ...(publicConfig.claude_mcp.enabled
+      ? readClaudeMcpServers(join(homedir(), ".claude.json"), publicConfig.claude_mcp.exclude)
+      : {}),
+    ...publicConfig.external_mcp,
+  }).map(([name, server]) => [
+    name,
+    "url" in server
+      ? server
+      : {
+          ...server,
+          command: server.command.startsWith("~/")
+            ? resolveConfiguredPath(server.command)
+            : server.command,
+          cwd: server.cwd ? resolveConfiguredPath(server.cwd) : undefined,
+        },
+  ])
+)
 
 export const MCP_CONFIG = {
   /** MCP server identity advertised to connected clients. */
@@ -171,6 +190,19 @@ export const MCP_CONFIG = {
     /** Time cached shell state remains restorable after hibernation. */
     cacheTimeoutMs: 24 * 60 * 60 * 1_000,
   },
+  /** Stdio and remote MCP servers reachable through mcp_list_tools and mcp_call. */
+  externalMcp: {
+    /** Servers declared by the operator; callers can only choose among these names. */
+    servers: externalMcpServers,
+    /** Private directory holding one OAuth login per remote server. */
+    loginDir: join(resolveConfiguredPath(publicConfig.state_dir), "external-mcp-auth"),
+    /** Maximum time for a server to start and finish the MCP handshake. */
+    connectTimeoutMs: 60_000,
+    /** Maximum time one external tool call may run. */
+    callTimeoutMs: 270_000,
+    /** Maximum model-output tokens of text returned by one external tool call. */
+    maxOutputTokens: 18_000,
+  },
   /** Feature flags controlling which MCP tool groups are registered. */
   tools: {
     /** Enables the Shellby feedback submission tool. */
@@ -195,6 +227,8 @@ export const MCP_CONFIG = {
     image: publicConfig.tools.image,
     /** Enables platform-specific computer-control tools. */
     computer: publicConfig.tools.computer,
+    /** Enabled when external_mcp or the Claude import provides at least one server. */
+    externalMcp: Object.keys(externalMcpServers).length > 0,
   },
 }
 

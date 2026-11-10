@@ -11,6 +11,8 @@ import { registerScreenViewer } from "../tools/computer/screen-viewer.js"
 import { registerCloneTools } from "../tools/delegation/clone-tools.js"
 import type { ChatGptDelegationService } from "../tools/delegation/contracts.js"
 import { registerSubagentTools } from "../tools/delegation/subagent-tools.js"
+import type { ExternalMcpManager } from "../tools/external-mcp/external-mcp-manager.js"
+import { registerExternalMcpTools } from "../tools/external-mcp/external-mcp-tools.js"
 import { registerFileReadTool, registerFileWriteTool } from "../tools/file/file-tools.js"
 import { registerImageTools } from "../tools/image/image-tools.js"
 import {
@@ -36,6 +38,7 @@ export interface CreateMcpServerOptions {
   peekaboo?: PeekabooClient
   peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
+  externalMcp?: ExternalMcpManager
   reviewPromptTracker?: ReviewPromptTracker
   auditRequest?: McpAuditRequest
   agentObserver?: AgentObserver
@@ -47,6 +50,7 @@ export interface McpCapabilityServices {
   peekaboo?: PeekabooClient
   peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
+  externalMcp?: ExternalMcpManager
 }
 
 export interface McpRuntimeProfile {
@@ -128,6 +132,11 @@ function createMcpServer(options: CreateMcpServerOptions, profile: McpRuntimePro
       registerComputerUseTools(registerTool, requireCapabilityService(options.peekaboo, "computer"))
     if (options.peekaboo?.executable.endsWith("shellby-desktop")) registerScreenViewer(server)
   }
+  if (profile.tools.externalMcp)
+    registerExternalMcpTools(
+      registerTool,
+      requireCapabilityService(options.externalMcp, "external MCP")
+    )
   if (profile.tools.clones)
     registerCloneTools(registerTool, requireCapabilityService(options.chatGptDelegation, "clone"))
   if (profile.tools.review) registerReviewTool(registerTool)
