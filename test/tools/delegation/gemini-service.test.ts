@@ -5,7 +5,7 @@ import { join } from "node:path"
 import test, { type TestContext } from "node:test"
 import { Script } from "node:vm"
 
-import { runWithAgent } from "../../../src/agent/context.js"
+import { agentChatMarker, runWithAgent } from "../../../src/agent/context.js"
 import { MCP_CONFIG } from "../../../src/config.js"
 import {
   ChatGptDelegationError,
@@ -17,7 +17,6 @@ import {
   GEMINI_SNAPSHOT_SCRIPT,
   GEMINI_TRANSCRIPT_SCRIPT,
   geminiAttachImageScript,
-  geminiMarkerScript,
   geminiSendScript,
   isGeminiConversationUrl,
 } from "../../../src/tools/delegation/gemini-page.js"
@@ -105,7 +104,8 @@ function setup(t: TestContext, answer?: string) {
   })
   const asGemini = <T>(callback: () => T) =>
     runWithAgent(`gemini-test-${directory}`, callback, "gemini")
-  return { ...fake, service, asGemini }
+  const marker = agentChatMarker(`gemini-test-${directory}`)
+  return { ...fake, service, asGemini, marker }
 }
 
 test("a subagent opens a Gemini tab, sends once, and returns the response", async (t) => {
@@ -163,32 +163,57 @@ test("clone_self seeds a new chat and refuses a non-Gemini source", async (t) =>
   assert.equal(tabs.size, 0)
 })
 
-test("dashboard delivery targets the one user chat, never a subagent's tab", async (t) => {
-  const { service, addTab, tabs, asGemini } = setup(t)
+test("dashboard delivery reaches the chat that called, never another open one", async (t) => {
+  const { service, addTab, tabs, asGemini, marker } = setup(t)
   await asGemini(async () => {
     await service.poll(await service.ask({ agentId: "a", prompt: "x", memory: true }, {}), 5_000)
   })
   const delegatedTab = [...tabs.values()][0]
-  assert.equal(await service.deliverToAgentChat("m", () => "nope", "gemini"), "missing")
+  const otherChat = addTab("https://gemini.google.com/app/other1")
+  assert.equal(await service.deliverToAgentChat(marker, () => "nope", "gemini"), "missing")
 
-  const chat = addTab(CHAT_URL)
-  assert.equal(await service.deliverToAgentChat("m", () => "do this", "gemini"), "sent")
+  const chat = addTab(CHAT_URL, { generating: true })
+  await asGemini(() => service.noteCallingChat())
+  chat.generating = false
+  assert.equal(await service.deliverToAgentChat(marker, () => "do this", "gemini"), "sent")
   assert.deepEqual(chat.sent, ["do this"])
+  assert.deepEqual(otherChat.sent, [])
   assert.equal(delegatedTab?.sent.length, 1)
 })
 
+test("dashboard delivery stops when the chat that called is closed", async (t) => {
+  const { service, addTab, tabs, asGemini, marker } = setup(t)
+  const chat = addTab(CHAT_URL, { generating: true })
+  await asGemini(() => service.noteCallingChat())
+  const otherChat = addTab("https://gemini.google.com/app/other1")
+  tabs.delete(chat.tab_id)
+  await assert.rejects(service.deliverToAgentChat(marker, () => "x", "gemini"))
+  assert.deepEqual(otherChat.sent, [])
+})
+
+test("two chats generating at once name no caller", async (t) => {
+  const { service, addTab, asGemini, marker } = setup(t)
+  addTab(CHAT_URL, { generating: true })
+  addTab("https://gemini.google.com/app/other1", { generating: true })
+  await asGemini(() => service.noteCallingChat())
+  assert.equal(await service.deliverToAgentChat(marker, () => "x", "gemini"), "missing")
+})
+
 test("dashboard delivery leaves a draft or a running response alone", async (t) => {
-  const { service, addTab } = setup(t)
-  const chat = addTab(CHAT_URL, { draft: true })
+  const { service, addTab, asGemini, marker } = setup(t)
+  const chat = addTab(CHAT_URL, { generating: true })
+  await asGemini(() => service.noteCallingChat())
+  chat.generating = false
+  chat.draft = true
   let claimed = false
   const claim = () => {
     claimed = true
     return "x"
   }
-  assert.equal(await service.deliverToAgentChat("m", claim, "gemini"), "draft")
+  assert.equal(await service.deliverToAgentChat(marker, claim, "gemini"), "draft")
   chat.draft = false
   chat.generating = true
-  assert.equal(await service.deliverToAgentChat("m", claim, "gemini"), "busy")
+  assert.equal(await service.deliverToAgentChat(marker, claim, "gemini"), "busy")
   assert.equal(claimed, false)
 })
 
@@ -218,8 +243,11 @@ test("a print waits for the calling chat's reply, then posts once", async (t) =>
 
 test("a print leaves a user's draft alone until it is gone", async (t) => {
   const { service, addTab } = setup(t)
-  const chat = addTab(CHAT_URL, { draft: true })
+  const chat = addTab(CHAT_URL, { generating: true, draft: true })
   assert.equal(await service.showImage("m", IMAGE), true)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(chat.images, 0)
+  chat.generating = false
   await new Promise((resolve) => setTimeout(resolve, 30))
   assert.equal(chat.images, 0)
   chat.draft = false
@@ -273,7 +301,6 @@ test("page scripts are valid JavaScript, including quotes and newlines in messag
     GEMINI_TRANSCRIPT_SCRIPT,
     geminiSendScript('line "one"\nline `two`'),
     geminiAttachImageScript("aGk=", "image/png", "print.png"),
-    geminiMarkerScript('shellby-agent:"x"'),
   ]
   for (const script of scripts) assert.doesNotThrow(() => new Script(script))
 })
