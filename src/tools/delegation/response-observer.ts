@@ -46,6 +46,9 @@ export async function observeAssistantResponse(
     resolveResponse = resolve
     rejectResponse = reject
   })
+  // Disposal before submission rejects a response nobody awaits yet; that must not
+  // surface as an unhandled rejection in place of the error that caused the disposal.
+  response.catch(() => undefined)
 
   const cleanup = async (): Promise<void> => {
     page.off("close", pageCloseHandler)
