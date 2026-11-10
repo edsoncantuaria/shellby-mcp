@@ -18,6 +18,6 @@ paths:
 - **Completion** is polled from the page, because there is no CDP stream: the prompt must be rendered, a response must exist, the stop button must be gone, and the text must hold still.
 - **Clones** are new chats seeded with the source transcript. Gemini has no branch to drive and only renders recent turns, so older context can be missing.
 - **`memory: false`** has no effect, and `chatgpt_project` is refused.
-- **Steering** targets the Gemini chat open in the dedicated Chrome. A lone non-delegated chat is the target; with several, only one showing the agent's marker qualifies.
+- **Steering** and prints go only to the chat that last called a tool: every Gemini tool call records the one non-delegated tab generating at that moment. Nothing is sent when no such tab is known, or when two chats generate at once, so another open chat is never used as a fallback.
 
-`computer_show` cannot return an image to Gemini: it shows neither the viewer widget nor MCP image results. It pastes the print into the calling chat, recognized as the one generating during the call, and sends it once the reply ends, skipping drafts and pending tool permission prompts. Gemini needs `@Shellbymcp` in the message to use the connector at all.
+`computer_show` cannot return an image to Gemini: it shows neither the viewer widget nor MCP image results. It pastes the print into the calling chat and sends it once the reply ends, skipping drafts and pending tool permission prompts. Gemini needs `@Shellbymcp` in the message to use the connector at all.

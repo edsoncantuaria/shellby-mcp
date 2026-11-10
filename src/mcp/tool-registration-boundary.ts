@@ -19,6 +19,8 @@ import { prepareToolRegistration } from "./tool-schema-presentation.js"
 export interface ToolRegistrationBoundaryOptions {
   structuredOutput: boolean
   drainPendingEvents?: () => string[]
+  /** Runs alongside every tool call, without delaying it. */
+  onToolCall?: () => Promise<void>
   agentObserver?: AgentObserver
   reviewPromptTracker?: ReviewPromptTracker
   auditRequest?: McpAuditRequest
@@ -77,6 +79,7 @@ export function createToolRegistrar(
             return result
           }
 
+          void options.onToolCall?.()
           observedCallId = options.agentObserver?.startTool(agent, name, input)
           const result = await (tool.acceptsInput
             ? tool.callback(inputValue, context)

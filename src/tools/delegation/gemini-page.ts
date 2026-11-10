@@ -145,10 +145,6 @@ export function geminiAttachImageScript(
 })(${JSON.stringify(base64)}, ${JSON.stringify(mimeType)}, ${JSON.stringify(fileName)})`
 }
 
-export function geminiMarkerScript(marker: string): string {
-  return `document.body.textContent.includes(${JSON.stringify(marker)})`
-}
-
 export function isGeminiUrl(value: string): boolean {
   try {
     return new URL(value).hostname === "gemini.google.com"

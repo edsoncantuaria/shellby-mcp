@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import type { AgentChatDeliveryResult } from "../../agent/chat-delivery.js"
-import { type AgentIdentity, getAgentIdentity } from "../../agent/context.js"
+import { type AgentIdentity, agentChatMarker, getAgentIdentity } from "../../agent/context.js"
 import { MCP_CONFIG } from "../../config.js"
 import { log } from "../../logging.js"
 import {
@@ -21,7 +21,6 @@ import {
   type GeminiSendOutcome,
   type GeminiTranscriptEntry,
   geminiAttachImageScript,
-  geminiMarkerScript,
   geminiSendScript,
   isGeminiConversationUrl,
   isGeminiUrl,
@@ -78,6 +77,8 @@ export type GeminiDelegationService = Omit<ChatGptDelegationService, "ensureProj
    * chat is not open in the dedicated Chrome.
    */
   showImage(marker: string, image: GeminiChatImage): Promise<boolean>
+  /** Call on every tool call so the agent's chat stays known. */
+  noteCallingChat(): Promise<void>
 }
 
 export interface GeminiChatImage {
@@ -96,6 +97,7 @@ export function createGeminiDelegationService(
   const turns = new Map<string, GeminiTurn>()
   const pendingEvents = new Map<string, string[]>()
   const imageDeliveries = new Map<number, Promise<void>>()
+  const callingChats = new Map<string, number>()
   let disposed = false
 
   const cleanupTimer = setInterval(() => void closeIdleTabs(), CLEANUP_INTERVAL_MS)
@@ -427,28 +429,11 @@ export function createGeminiDelegationService(
     return events
   }
 
-  /**
-   * Any Gemini chat open in the dedicated Chrome that no subagent owns is the user's, so a lone
-   * one is the target. With several, only one whose page shows the agent's marker qualifies.
-   */
-  async function findAgentChat(marker: string): Promise<number | undefined> {
-    const delegated = new Set([...agents.values()].map((agent) => agent.tabId))
-    const candidates = (await geminiTabs()).filter(
-      (tab) => !delegated.has(tab.tabId) && isGeminiConversationUrl(tab.url)
-    )
-    if (candidates.length <= 1) return candidates[0]?.tabId
-    const showing: number[] = []
-    for (const { tabId } of candidates) {
-      if (await evaluate<boolean>(tabId, geminiMarkerScript(marker))) showing.push(tabId)
-    }
-    return showing.length === 1 ? showing[0] : undefined
-  }
-
   async function deliverToAgentChat(
     marker: string,
     claimMessage: () => string | undefined
   ): Promise<AgentChatDeliveryResult> {
-    const tabId = await findAgentChat(marker)
+    const tabId = callingChats.get(marker)
     if (tabId === undefined) return "missing"
     const snapshot = await evaluate<GeminiPageSnapshot | null>(tabId, GEMINI_SNAPSHOT_SCRIPT)
     if (!snapshot?.ready) return "missing"
@@ -461,18 +446,31 @@ export function createGeminiDelegationService(
   }
 
   /** A tool call arrives mid-reply, so the one chat generating right now is the caller. */
-  async function findCallingChat(marker: string): Promise<number | undefined> {
+  async function generatingChat(): Promise<number | undefined> {
     const delegated = new Set([...agents.values()].map((agent) => agent.tabId))
     const generating: number[] = []
     for (const { tabId } of (await geminiTabs()).filter((tab) => !delegated.has(tab.tabId))) {
       const snapshot = await evaluate<GeminiPageSnapshot | null>(tabId, GEMINI_SNAPSHOT_SCRIPT)
       if (snapshot?.generating) generating.push(tabId)
     }
-    return generating.length === 1 ? generating[0] : findAgentChat(marker)
+    return generating.length === 1 ? generating[0] : undefined
+  }
+
+  /**
+   * Remembers which tab the calling agent's chat is, so steering and prints reach that chat and
+   * never another one that happens to be open.
+   */
+  async function noteCallingChat(): Promise<void> {
+    const agent = getAgentIdentity()
+    if (agent?.provider !== "gemini") return
+    const tabId = await generatingChat().catch((error: unknown) => {
+      log("warn", "delegation.gemini_chat_lookup_failed", { err: error })
+    })
+    if (tabId !== undefined) callingChats.set(agentChatMarker(agent.sessionId), tabId)
   }
 
   async function showImage(marker: string, image: GeminiChatImage): Promise<boolean> {
-    const tabId = await findCallingChat(marker)
+    const tabId = (await generatingChat()) ?? callingChats.get(marker)
     if (tabId === undefined) return false
     const previous = imageDeliveries.get(tabId) ?? Promise.resolve()
     imageDeliveries.set(
@@ -539,6 +537,7 @@ export function createGeminiDelegationService(
     poll,
     drainEvents,
     deliverToAgentChat,
+    noteCallingChat,
     showImage,
     dispose,
   }

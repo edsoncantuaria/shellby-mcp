@@ -38,7 +38,7 @@ import { createToolRegistrar } from "./tool-registration-boundary.js"
 export interface CreateMcpServerOptions {
   shellManager?: ShellSessionManager
   chatGptDelegation?: ChatGptDelegationService
-  geminiChat?: Pick<GeminiDelegationService, "showImage">
+  geminiChat?: Pick<GeminiDelegationService, "showImage" | "noteCallingChat">
   peekaboo?: PeekabooClient
   peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
@@ -52,7 +52,7 @@ export interface CreateMcpServerOptions {
 export interface McpCapabilityServices {
   shellManager?: ShellSessionManager
   chatGptDelegation?: ChatGptDelegationService
-  geminiChat?: Pick<GeminiDelegationService, "showImage">
+  geminiChat?: Pick<GeminiDelegationService, "showImage" | "noteCallingChat">
   peekaboo?: PeekabooClient
   peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
@@ -110,6 +110,7 @@ function createMcpServer(options: CreateMcpServerOptions, profile: McpRuntimePro
   const registerTool = createToolRegistrar(server, {
     structuredOutput: profile.toolOutput === "structured",
     drainPendingEvents: chatGptDelegation ? () => chatGptDelegation.drainEvents() : undefined,
+    onToolCall: options.geminiChat?.noteCallingChat,
     agentObserver: options.agentObserver,
     reviewPromptTracker: options.reviewPromptTracker,
     auditRequest: options.auditRequest,
