@@ -22,7 +22,7 @@ import * as Main from "resource:///org/gnome/shell/ui/main.js"
 const BUS_NAME = "dev.shellby.Desktop"
 const OBJECT_PATH = "/dev/shellby/Desktop"
 const ERROR_NAME = "dev.shellby.Desktop.Error"
-const API_VERSION = 2
+const API_VERSION = 4
 
 const INTERFACE = `
 <node>
@@ -44,6 +44,18 @@ const INTERFACE = `
     <method name="PointerMove">
       <arg type="d" name="x" direction="in"/>
       <arg type="d" name="y" direction="in"/>
+    </method>
+    <method name="Hold">
+      <arg type="s" name="kind" direction="in"/>
+      <arg type="u" name="code" direction="in"/>
+      <arg type="b" name="pressed" direction="in"/>
+    </method>
+    <method name="ReleaseHeld"/>
+    <method name="GetClipboard"><arg type="s" direction="out"/></method>
+    <method name="ShellState"><arg type="s" direction="out"/></method>
+    <method name="PointerRelative">
+      <arg type="d" name="dx" direction="in"/>
+      <arg type="d" name="dy" direction="in"/>
     </method>
     <method name="PointerPosition"><arg type="ad" direction="out"/></method>
     <method name="PointerWarp">
@@ -101,6 +113,10 @@ const POPUP_WINDOW_TYPES = new Set([
   Meta.WindowType.POPUP_MENU,
   Meta.WindowType.COMBO,
 ])
+
+// Held input is released on its own if the caller goes away.
+const HOLD_LIMIT_MS = 30_000
+const MAX_WORKSPACE_INDEX = 35
 
 const CURSOR_SIZE = 18
 const CURSOR_LINGER_MS = 1500
@@ -171,9 +187,12 @@ class DesktopService {
     })
     Main.uiGroup.add_child(this._cursor)
     this._cursorTimer = 0
+    this._held = new Map()
+    this._holdTimer = 0
   }
 
   destroy() {
+    this.ReleaseHeld()
     if (this._cursorTimer) GLib.source_remove(this._cursorTimer)
     this._cursorTimer = 0
     this._cursor.destroy()
@@ -208,6 +227,7 @@ class DesktopService {
           shadow_x: window.get_frame_rect().x - window.get_buffer_rect().x,
           shadow_y: window.get_frame_rect().y - window.get_buffer_rect().y,
           monitor: window.get_monitor(),
+          workspace: window.get_workspace()?.index() ?? -1,
           on_active_workspace: window.located_on_workspace(activeWorkspace),
           stacking: stacking.indexOf(window),
         }
@@ -237,6 +257,20 @@ class DesktopService {
       case "focus":
         Main.activateWindow(window)
         break
+      case "move_monitor":
+        if (geometry[0] >= global.display.get_n_monitors())
+          throw new Error(`SCREEN_NOT_FOUND: No screen has index ${geometry[0]}.`)
+        window.move_to_monitor(geometry[0])
+        break
+      case "move_workspace": {
+        if (geometry[0] > MAX_WORKSPACE_INDEX)
+          throw new Error(`INVALID_WORKSPACE: Workspace ${geometry[0]} is out of range.`)
+        const manager = global.workspace_manager
+        while (manager.n_workspaces <= geometry[0])
+          manager.append_new_workspace(false, global.get_current_time())
+        window.change_workspace_by_index(geometry[0], false)
+        break
+      }
       case "close":
         window.delete(global.get_current_time())
         break
@@ -279,6 +313,9 @@ class DesktopService {
   async _screenshot(kind, id, path) {
     this._hideCursor()
     const file = Gio.File.new_for_path(path)
+    // Callers share the session bus, so this write must not reach arbitrary files.
+    if (!file.get_path().startsWith(`${GLib.get_user_runtime_dir()}/shellby-desktop/`))
+      throw new Error("INVALID_PATH: Screenshots can only be written to the runtime directory.")
     const stream = file.replace(null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, null)
     try {
       if (kind === "screen") {
@@ -341,6 +378,52 @@ class DesktopService {
   PointerMove(x, y) {
     this._pointer.notify_absolute_motion(GLib.get_monotonic_time(), x, y)
     this._showCursor(x, y)
+  }
+
+  // A system dialog or the lock screen takes all input away from applications.
+  Hold(kind, code, pressed) {
+    if (kind !== "key" && kind !== "button") throw new Error(`INVALID_HOLD: Unknown kind ${kind}.`)
+    if (kind === "key") this.Key(code, pressed)
+    else this.PointerButton(code, pressed)
+    if (pressed) this._held.set(`${kind}:${code}`, { kind, code })
+    else this._held.delete(`${kind}:${code}`)
+    if (this._holdTimer) GLib.source_remove(this._holdTimer)
+    this._holdTimer = 0
+    if (this._held.size > 0) {
+      this._holdTimer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, HOLD_LIMIT_MS, () => {
+        this._holdTimer = 0
+        this.ReleaseHeld()
+        return GLib.SOURCE_REMOVE
+      })
+    }
+  }
+
+  ReleaseHeld() {
+    if (this._holdTimer) GLib.source_remove(this._holdTimer)
+    this._holdTimer = 0
+    for (const { kind, code } of this._held.values()) {
+      if (kind === "key") this.Key(code, false)
+      else this.PointerButton(code, false)
+    }
+    this._held.clear()
+  }
+
+  GetClipboardAsync(_parameters, invocation) {
+    St.Clipboard.get_default().get_text(St.ClipboardType.CLIPBOARD, (_clipboard, text) => {
+      invocation.return_value(new GLib.Variant("(s)", [text ?? ""]))
+    })
+  }
+
+  ShellState() {
+    const dialogs = Main.layoutManager.modalDialogGroup.get_children()
+    return JSON.stringify({
+      dialog: dialogs.some((actor) => actor.visible),
+      locked: Main.sessionMode.isLocked,
+    })
+  }
+
+  PointerRelative(dx, dy) {
+    this._pointer.notify_relative_motion(GLib.get_monotonic_time(), dx, dy)
   }
 
   PointerPosition() {

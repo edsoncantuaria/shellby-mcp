@@ -48,7 +48,7 @@ export async function startMcpHttpServer(options: TestMcpServerOptions = {}) {
     ? (services.shellManager ?? createShellSessionManager())
     : undefined
   const peekaboo = tools.computer
-    ? (services.peekaboo ?? new PeekabooClient({ localOnly: true }))
+    ? (services.peekaboo ?? new PeekabooClient({ localOnly: true, executable: "peekaboo" }))
     : undefined
   const chatGptDelegation =
     tools.clones || tools.subagents

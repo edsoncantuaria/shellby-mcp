@@ -3,6 +3,7 @@ import { z } from "zod"
 import type { ToolRegistrar } from "../../mcp/tool-registration-boundary.js"
 
 import { asRecord, booleanValue, finiteNumber as numberValue } from "../../utils.js"
+import { registerGnomeTools } from "./gnome-tools.js"
 import {
   type PeekabooClient,
   PeekabooError,
@@ -11,26 +12,26 @@ import {
   type PeekabooObservationTarget,
   type PeekabooResult,
 } from "./peekaboo.js"
+import {
+  addTargetArgs,
+  appInput,
+  callPeekaboo,
+  commandResult,
+  peekabooToolError,
+  snapshotInput,
+  targetFields,
+  windowIdInput,
+} from "./tool-shared.js"
 
-const appInput = z.string().min(1).describe("App name, bundle or desktop ID, or PID:12345.")
-const snapshotInput = z
-  .string()
-  .min(1)
-  .describe("Snapshot ID from computer_observe or computer_inspect.")
-const windowIdInput = z.number().int().positive().describe("Window ID from computer_list.")
 const KEY_TOKEN_PATTERN = /^[A-Za-z0-9_]+$/u
-
-const targetFields = {
-  app: appInput.optional(),
-  window_id: windowIdInput.optional(),
-  snapshot_id: snapshotInput.optional(),
-}
 
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: Registration stays together so shared schemas and tool contracts remain locally auditable.
 export function registerComputerUseTools(
   registerTool: ToolRegistrar,
   peekaboo: PeekabooClient
 ): void {
+  const hasGnomeCommands = peekaboo.executable.endsWith("shellby-desktop")
+
   const listSchema = z.object({
     kind: z.enum(["apps", "windows", "screens", "permissions"]).default("apps"),
     app: appInput.optional().describe("App whose windows to list."),
@@ -141,6 +142,12 @@ export function registerComputerUseTools(
         max_depth: z.number().int().min(1).max(20).default(8),
         max_elements: z.number().int().min(1).max(500).default(100),
         max_children: z.number().int().min(1).max(100).default(25),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Elements to skip, from the offset named in a truncated result."),
       }),
       nativeContent: true,
       annotations: {
@@ -150,7 +157,7 @@ export function registerComputerUseTools(
         openWorldHint: false,
       },
     },
-    async ({ snapshot_id, max_depth, max_elements, max_children }, ctx) => {
+    async ({ snapshot_id, max_depth, max_elements, max_children, offset }, ctx) => {
       try {
         const result = await peekaboo.inspect(
           {
@@ -158,6 +165,7 @@ export function registerComputerUseTools(
             maxDepth: max_depth,
             maxElements: max_elements,
             maxChildren: max_children,
+            ...(offset && hasGnomeCommands ? { offset } : {}),
           },
           ctx.mcpReq.signal
         )
@@ -541,7 +549,8 @@ export function registerComputerUseTools(
   registerTool(
     "computer_drag",
     {
-      description: "Drag between coordinates inside one exact observed window.",
+      description:
+        "Drag between coordinates of an observed window, or across the desktop from a screen observation on GNOME.",
       inputSchema: dragSchema,
       nativeContent: true,
       annotations: {
@@ -552,6 +561,24 @@ export function registerComputerUseTools(
       },
     },
     async (input, ctx) => {
+      if (
+        hasGnomeCommands &&
+        peekaboo.getSnapshotTarget(input.snapshot_id)?.kind?.includes("screen")
+      ) {
+        const args = [
+          "drag",
+          "--from",
+          `${input.from.x},${input.from.y}`,
+          "--to",
+          `${input.to.x},${input.to.y}`,
+          "--snapshot",
+          input.snapshot_id,
+          "--global",
+        ]
+        if (input.duration_ms !== undefined) args.push("--duration", String(input.duration_ms))
+        if (input.steps !== undefined) args.push("--steps", String(input.steps))
+        return callPeekaboo(peekaboo, args, ctx.mcpReq.signal, "Drag completed.")
+      }
       let target: PeekabooExactWindowTarget
       try {
         target = peekaboo.requireExactWindowTarget(
@@ -586,6 +613,8 @@ export function registerComputerUseTools(
       }
     }
   )
+
+  if (hasGnomeCommands) registerGnomeTools(registerTool, peekaboo)
 
   const appSchema = z
     .object({
@@ -748,15 +777,6 @@ function hasScrollBackgroundTarget(
   )
 }
 
-function addTargetArgs(
-  args: string[],
-  target: { app?: string; window_id?: number; snapshot_id?: string }
-): void {
-  if (target.app !== undefined) args.push("--app", target.app)
-  if (target.window_id !== undefined) args.push("--window-id", String(target.window_id))
-  if (target.snapshot_id !== undefined) args.push("--snapshot", target.snapshot_id)
-}
-
 function appCommandArgs(
   action: "launch" | "switch" | "quit" | "relaunch" | "hide" | "unhide",
   app: string,
@@ -786,31 +806,6 @@ function appCommandArgs(
   return ["app", action, "--app", app]
 }
 
-async function callPeekaboo(
-  peekaboo: PeekabooClient,
-  args: string[],
-  signal: AbortSignal,
-  fallbackSummary: string
-): Promise<CallToolResult> {
-  try {
-    return commandResult(await peekaboo.run(args, signal), fallbackSummary)
-  } catch (error) {
-    return peekabooToolError(error)
-  }
-}
-
-function commandResult(result: PeekabooResult, fallbackSummary: string): CallToolResult {
-  const summary =
-    typeof result.summary === "string"
-      ? result.summary
-      : (result.messages?.find((message) => message.trim()) ?? fallbackSummary)
-  const structuredContent = asStructuredContent(result.data)
-  return {
-    content: [{ type: "text", text: summary }],
-    ...(structuredContent ? { structuredContent } : {}),
-  }
-}
-
 function observationResult(observation: PeekabooObservation): CallToolResult {
   const data = asRecord(observation.data) ?? {}
   const application = stringValue(data.application_name)
@@ -823,6 +818,7 @@ function observationResult(observation: PeekabooObservation): CallToolResult {
     capture_mode: stringValue(data.capture_mode),
     element_count: numberValue(data.element_count),
     interactable_count: numberValue(data.interactable_count),
+    truncated: booleanValue(data.truncated),
   })
   const target = [application, windowTitle].filter(Boolean).join(" — ") || "computer"
 
@@ -831,7 +827,7 @@ function observationResult(observation: PeekabooObservation): CallToolResult {
     content: [
       {
         type: "text",
-        text: `Observed ${target}.`,
+        text: `Observed ${target}.${data.truncated ? " The element list is partial; use computer_inspect with offset for the rest." : ""}`,
       },
       {
         type: "image",
@@ -875,34 +871,6 @@ function inspectionResult(result: PeekabooResult): CallToolResult {
     content: [{ type: "text", text: snapshotId ? `snapshot_id=${snapshotId}\n${text}` : text }],
     ...(snapshotId ? { structuredContent: { snapshot_id: snapshotId, text } } : {}),
   }
-}
-
-function peekabooToolError(error: unknown): CallToolResult {
-  if (error instanceof PeekabooError) {
-    return {
-      content: [
-        {
-          type: "text",
-          text: `${error.code}: ${error.message}${error.details ? ` (${error.details})` : ""}`,
-        },
-      ],
-      isError: true,
-    }
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: error instanceof Error ? error.message : String(error),
-      },
-    ],
-    isError: true,
-  }
-}
-
-function asStructuredContent(value: unknown): Record<string, unknown> | null {
-  if (value === undefined) return null
-  return asRecord(value) ?? { value }
 }
 
 function omitUndefined(value: Record<string, unknown>): Record<string, unknown> {

@@ -31,15 +31,20 @@ Requires GNOME Shell 50 and `python3-gi python3-gi-cairo gir1.2-atspi-2.0 gir1.2
   - Scrolling moves the pointer and puts it back. A covered window borrows focus.
   - Key presses and drags borrow focus, then return focus and pointer.
   - Right and double clicks and coordinate clicks use the real pointer and leave focus on the target.
+- **System dialogs stop input.** While a GNOME dialog (keyring, polkit) or the lock screen holds the keyboard and pointer, input tools fail with `SYSTEM_DIALOG_ACTIVE` or `SCREEN_LOCKED` instead of reporting success. The dialog's buttons can still be clicked as elements of a screen observation.
+- **Minimized windows** are shown just long enough to be observed, then minimized again.
+- **GNOME-only tools.** `computer_move` sends relative pointer motion for games that capture the mouse; `computer_hold` keeps keys or buttons down (released after 30 s at most); `computer_clipboard` reads and writes the clipboard; `computer_window_place` moves a window to another screen or workspace.
+- **Typing is checked.** When the receiving field can be read, a text that did not arrive fails with `INPUT_NOT_DELIVERED`, and losing the focus while typing fails with `FOCUS_LOST`.
+- **Long pages are paged.** A partial element list is flagged, and `computer_inspect` continues from `offset`. Dragging from a screen observation works across windows.
 - **Screenshots are in logical pixels**, so screenshot coordinates equal desktop coordinates on HiDPI displays.
 - **Typing follows the active keyboard layout**, including symbols that need Shift+AltGr. Characters with no key in the layout go through the GNOME input method, or the clipboard (Ctrl+V) in apps that do not use one, such as Chrome.
 - **`cmd` means Ctrl.** Use `super` for the Super key.
 - **Open menus are part of the window.** Captures grow to include popups, and image coordinates stay valid.
-- **Every app can be seen and driven; element trees depend on the app.** Screenshots, coordinates, typing, and window actions work on any window, including X11, Flatpak, and Snap apps. GTK, Qt, and X11 toolkits expose elements by default. Chromium, Electron, Firefox, and QtWebEngine need a switch, so the installer detects them among your launchers and enables it (`--uninstall` reverts it, and rerun the installer after adding such an app); reopen them to apply it. Games and custom-drawn UIs such as Blender and Godot have no element tree: use screenshot coordinates. GTK4 reports element positions up to about 12 px off, and its hit test uses the same wrong coordinates, so this only matters for clicks that use the pointer on small widgets; prefer screenshot coordinates there.
+- **Every app can be seen and driven; element trees depend on the app.** Screenshots, coordinates, typing, and window actions work on any window, including X11, Flatpak, and Snap apps. GTK, Qt, and X11 toolkits expose elements by default. Chromium, Electron, Firefox, QtWebEngine, and Java apps need a switch, so the installer detects them among your launchers and enables it (`--uninstall` reverts it). Shellby repeats the detection every time it starts, so new apps are picked up; reopen them to apply it. Java needs `libatk-wrapper-java`. Games and custom-drawn UIs such as Blender and Godot have no element tree; when `tesseract-ocr` is installed, their on-screen text becomes clickable `ocr text` elements, and a text search falls back to OCR. Icons and stylized text still need screenshot coordinates. GTK4 reports element positions up to about 12 px off, and its hit test uses the same wrong coordinates, so this only matters for clicks that use the pointer on small widgets; prefer screenshot coordinates there.
 
 ## Trust boundary
 
-Any process on the user's session bus can call `dev.shellby.Desktop`, which means it can read the screen and inject input. That is the same trust domain as the desktop session itself; sandboxed (Flatpak) apps cannot reach it unless granted session-bus access.
+Any process on the user's session bus can call `dev.shellby.Desktop`, which means it can read the screen and inject input. Screenshots are only written inside the user's runtime directory, so the service cannot be used to overwrite other files. That is the same trust domain as the desktop session itself; sandboxed (Flatpak) apps cannot reach it unless granted session-bus access.
 
 ## Verification
 

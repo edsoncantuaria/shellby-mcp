@@ -62,6 +62,17 @@ if (hardRestart) {
 if (process.platform === "linux" && !usesPeekabooxDaemon && !hardRestart) {
   runAllowFailure(process.execPath, ["--import", "tsx", pm2Script, "delete", "shellby-peekabooxd"])
 }
+if (
+  process.platform === "linux" &&
+  MCP_CONFIG.tools.computer &&
+  MCP_CONFIG.computerBackend === "peekaboo"
+) {
+  // Apps installed since the last start need their accessibility switch too.
+  runAllowFailure(process.execPath, [
+    join(repoRoot, "linux", "install-extension.mjs"),
+    "--launchers",
+  ])
+}
 if (restarting) await rm(join(repoRoot, "agent-commands.yaml"), { force: true })
 if (MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents) {
   run(process.execPath, [

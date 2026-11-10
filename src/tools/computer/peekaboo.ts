@@ -67,6 +67,7 @@ export interface PeekabooInspectRequest {
   maxDepth: number
   maxElements: number
   maxChildren: number
+  offset?: number
 }
 
 export interface PeekabooExactWindowTarget {
@@ -322,6 +323,7 @@ export class PeekabooClient {
         String(request.maxElements),
         "--max-children",
         String(request.maxChildren),
+        ...(request.offset ? ["--skip", String(request.offset)] : []),
       ],
       signal
     )

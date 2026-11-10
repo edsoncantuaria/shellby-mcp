@@ -34,6 +34,9 @@ const WEBENGINE_ENV = [
   "QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1",
   `QTWEBENGINE_CHROMIUM_FLAGS=${ACCESSIBILITY_FLAG}`,
 ]
+const JAVA_BRIDGE_JAR = "/usr/share/java/java-atk-wrapper.jar"
+const JAVA_BRIDGE_CLASS = "org.GNOME.Accessibility.AtkWrapper"
+const JNI_DIRS = ["/usr/lib/x86_64-linux-gnu/jni", "/usr/lib/aarch64-linux-gnu/jni"]
 const SYSTEM_APPLICATION_DIRS = [
   "/usr/share/applications",
   "/var/lib/snapd/desktop/applications",
@@ -45,6 +48,9 @@ const CHROMIUM_FILES = ["chrome_100_percent.pak", "v8_context_snapshot.bin"]
 const MAJOR_VERSION = /(\d+)/u
 const EXEC_LINE = /^Exec=(.*)$/gmu
 const EXEC_LINE_ONCE = /^Exec=(.*)$/mu
+const JAVA_BRIDGE_ARGS =
+  / -Xbootclasspath\/a:\S*java-atk-wrapper\S* -Dsun\.boot\.library\.path=\S+ -Djavax\.accessibility\.assistive_technologies=\S+/gu
+const JBR_ENV_PREFIX = /^Exec=env "JAVA_TOOL_OPTIONS=[^"]*" /gmu
 const NO_DISPLAY = /^NoDisplay=true$/mu
 const GECKO_PROGRAM = /^(firefox|thunderbird|librewolf|zen)/u
 const GECKO_APP_ID = /(firefox|thunderbird|librewolf|zen)/iu
@@ -66,6 +72,9 @@ if (mode === "--status") {
   }
   console.log(`extension files: ${existsSync(target) ? target : "not installed"}`)
   console.log(summary)
+} else if (mode === "--launchers") {
+  const launchers = enableAccessibilityLaunchers()
+  if (launchers.length > 0) console.log(`Accessibility enabled for: ${launchers.join(", ")}.`)
 } else if (mode === "--uninstall") {
   run("gnome-extensions", ["disable", uuid])
   rmSync(target, { recursive: true, force: true })
@@ -74,17 +83,19 @@ if (mode === "--status") {
 } else if (mode === "--install") {
   install()
 } else {
-  fail("Usage: node linux/install-extension.mjs [--install | --status | --uninstall]")
+  fail("Usage: node linux/install-extension.mjs [--install | --status | --launchers | --uninstall]")
 }
 
 function install() {
   const version = run("gnome-shell", ["--version"])
   const major = version.status === 0 ? version.stdout.match(MAJOR_VERSION)?.[1] : undefined
   if (!major) fail("GNOME Shell was not found. Shellby Desktop supports GNOME on Wayland only.")
-  if (!metadata["shell-version"].includes(major)) {
+  if (
+    !(metadata["shell-version"].includes(major) || process.argv.includes("--allow-untested-shell"))
+  ) {
     fail(
       `GNOME Shell ${major} is not in the extension's tested versions (${metadata["shell-version"].join(", ")}). ` +
-        "Review linux/gnome-extension/extension.js against this Shell version and add it to metadata.json."
+        "Review linux/gnome-extension/extension.js against this Shell version and add it to metadata.json, or install anyway with --allow-untested-shell."
     )
   }
   const bindings = run("python3", [
@@ -99,6 +110,10 @@ function install() {
 
   mkdirSync(target, { recursive: true })
   cpSync(source, target, { recursive: true })
+  if (!metadata["shell-version"].includes(major)) {
+    const installed = { ...metadata, "shell-version": [...metadata["shell-version"], major] }
+    writeFileSync(join(target, "metadata.json"), `${JSON.stringify(installed, null, 2)}\n`)
+  }
   console.log(`Installed ${uuid} to ${target}`)
 
   // A running Wayland shell only discovers new extensions at login, so
@@ -135,7 +150,12 @@ function enableAccessibilityLaunchers() {
       continue
     }
     if (!engine) continue
-    const edit = engine === "gecko" ? withGeckoEnvironment : withChromiumFlag
+    const edit = {
+      chromium: withChromiumFlag,
+      gecko: withGeckoEnvironment,
+      java: withJavaBridge,
+      jbr: withJetBrainsRuntimeBridge,
+    }[engine]
     const origin = path === join(applicationsDir, name) ? "patched" : "copy"
     const flagged = text
       .replace(EXEC_LINE, (_line, command) => `Exec=${edit(command, name)}`)
@@ -161,6 +181,8 @@ function removeAccessibilityLaunchers() {
         text
           .replaceAll(` ${ACCESSIBILITY_FLAG}`, "")
           .replaceAll(`env ${GECKO_ACCESSIBILITY_ENV} `, "")
+          .replaceAll(JAVA_BRIDGE_ARGS, "")
+          .replace(JBR_ENV_PREFIX, "Exec=")
           .replace(MARKER_LINE, "")
       )
     }
@@ -189,7 +211,10 @@ function launcherEngine(name, text) {
   const program = tokens[programIndex(tokens)]
   if (basename(program) === "flatpak") return flatpakEngine(appId(name))
   if (GECKO_PROGRAM.test(basename(program))) return "gecko"
+  if (basename(program) === "java")
+    return tokens.includes("-jar") && javaBridgeLibrary() ? "java" : undefined
   if (program.startsWith("/snap/bin/")) {
+    if (existsSync(jetBrainsRuntimeLibraries(program)) && javaBridgeLibrary()) return "jbr"
     const found = run("find", [
       `/snap/${basename(program)}/current/`,
       "-maxdepth",
@@ -216,6 +241,11 @@ function flatpakEngine(id) {
   return GECKO_APP_ID.test(id) ? "gecko" : undefined
 }
 
+function javaBridgeLibrary() {
+  if (!existsSync(JAVA_BRIDGE_JAR)) return
+  return JNI_DIRS.find((dir) => existsSync(join(dir, "libatk-wrapper.so")))
+}
+
 function appId(name) {
   return name.replace(DESKTOP_SUFFIX, "")
 }
@@ -234,6 +264,36 @@ function withChromiumFlag(command, name) {
   const after = basename(tokens[program]) === "flatpak" ? tokens.indexOf(appId(name)) : program
   tokens.splice((after === -1 ? program : after) + 1, 0, ACCESSIBILITY_FLAG)
   return tokens.join(" ")
+}
+
+// The bridge loads from the boot class path, so its library must be on the boot library path.
+function withJavaBridge(command) {
+  const tokens = command.split(" ")
+  const program = programIndex(tokens)
+  const runtimeLibraries = join(dirname(dirname(realpathSync(tokens[program]))), "lib")
+  tokens.splice(
+    program + 1,
+    0,
+    `-Xbootclasspath/a:${JAVA_BRIDGE_JAR}`,
+    `-Dsun.boot.library.path=${runtimeLibraries}:${javaBridgeLibrary()}`,
+    `-Djavax.accessibility.assistive_technologies=${JAVA_BRIDGE_CLASS}`
+  )
+  return tokens.join(" ")
+}
+
+function jetBrainsRuntimeLibraries(program) {
+  return `/snap/${basename(program)}/current/jbr/lib`
+}
+
+// IDEs bundle their own runtime and take JVM options only from the environment.
+function withJetBrainsRuntimeBridge(command) {
+  const program = command.split(" ")[0]
+  const options = [
+    `-Xbootclasspath/a:${JAVA_BRIDGE_JAR}`,
+    `-Dsun.boot.library.path=${jetBrainsRuntimeLibraries(program)}:${javaBridgeLibrary()}`,
+    `-Djavax.accessibility.assistive_technologies=${JAVA_BRIDGE_CLASS}`,
+  ].join(" ")
+  return `env "JAVA_TOOL_OPTIONS=${options}" ${command}`
 }
 
 function withGeckoEnvironment(command) {

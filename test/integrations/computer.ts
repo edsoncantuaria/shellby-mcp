@@ -384,3 +384,24 @@ test("routes Computer Use through Peekaboo and preserves semantic errors", {
     },
   ])
 })
+
+test("only the GNOME helper publishes relative pointer motion", async (t) => {
+  const peekaboo = new PeekabooClient({ localOnly: true, executable: "/opt/linux/shellby-desktop" })
+  const running = await startMcpHttpServer({ peekaboo })
+  t.after(() => running.close())
+  const { client } = await connectClient(running.url, "gnome-tool-surface")
+  t.after(() => client.close())
+
+  const { tools } = await client.listTools()
+  for (const name of [
+    "computer_move",
+    "computer_hold",
+    "computer_clipboard",
+    "computer_window_place",
+  ]) {
+    assert.ok(
+      tools.some((tool) => tool.name === name),
+      name
+    )
+  }
+})
