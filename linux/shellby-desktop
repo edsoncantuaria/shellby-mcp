@@ -1056,8 +1056,10 @@ def command_see(desktop, positional, options):
     capture = not options.get("--no-screenshot")
     path = options.get("--path") or os.path.join(snapshot_directory(), f"{snapshot_id}.png")
 
-    if options.get("--mode") == "screen":
-        screen_index = integer(options, "--screen-index", 0)
+    # With no target the desktop is the useful answer: the focused window is usually the chat itself.
+    if options.get("--mode") in ("screen", "frontmost"):
+        primary = next((item["index"] for item in desktop.monitors() if item["primary"]), 0)
+        screen_index = integer(options, "--screen-index", primary)
         monitor = next((item for item in desktop.monitors() if item["index"] == screen_index), None)
         if monitor is None:
             raise Fail("SCREEN_NOT_FOUND", f"No screen has index {screen_index}.")

@@ -79,8 +79,13 @@ export function registerComputerUseTools(
         .int()
         .nonnegative()
         .optional()
-        .describe("Display index. Omit for the frontmost window."),
+        .describe("Display index, for the whole desktop. Omit for the frontmost window."),
       annotate: z.boolean().default(false).describe("Overlay element IDs."),
+      save_path: z
+        .string()
+        .startsWith("/")
+        .optional()
+        .describe("Absolute path to also save the screenshot as a PNG on this machine."),
     })
     .superRefine((value, context) => {
       if (
@@ -98,7 +103,7 @@ export function registerComputerUseTools(
     "computer_observe",
     {
       description:
-        "Capture a screenshot and snapshot ID for an app, window, screen, or the frontmost window. Observe again after the UI changes.",
+        "Capture a screenshot and snapshot ID for an app, window, screen, or the frontmost window. Pass screen_index for the desktop. This only shows the image to you; to show the user, use computer_show where available. Set save_path to keep a PNG. Observe again after the UI changes.",
       inputSchema: observeSchema,
       nativeContent: true,
       annotations: {
@@ -108,7 +113,7 @@ export function registerComputerUseTools(
         openWorldHint: false,
       },
     },
-    async ({ app, window_id, screen_index, annotate }, ctx) => {
+    async ({ app, window_id, screen_index, annotate, save_path }, ctx) => {
       let target: PeekabooObservationTarget
       if (screen_index !== undefined) {
         target = { kind: "screen", screenIndex: screen_index }
@@ -122,10 +127,10 @@ export function registerComputerUseTools(
 
       try {
         const observation = await peekaboo.observe(
-          { target, annotate, noWebFocus: true },
+          { target, annotate, noWebFocus: true, ...(save_path ? { savePath: save_path } : {}) },
           ctx.mcpReq.signal
         )
-        return observationResult(observation)
+        return observationResult(observation, save_path)
       } catch (error) {
         return peekabooToolError(error)
       }
@@ -806,7 +811,7 @@ function appCommandArgs(
   return ["app", action, "--app", app]
 }
 
-function observationResult(observation: PeekabooObservation): CallToolResult {
+function observationResult(observation: PeekabooObservation, savedPath?: string): CallToolResult {
   const data = asRecord(observation.data) ?? {}
   const application = stringValue(data.application_name)
   const windowTitle = stringValue(data.window_title)
@@ -819,6 +824,7 @@ function observationResult(observation: PeekabooObservation): CallToolResult {
     element_count: numberValue(data.element_count),
     interactable_count: numberValue(data.interactable_count),
     truncated: booleanValue(data.truncated),
+    saved_path: savedPath,
   })
   const target = [application, windowTitle].filter(Boolean).join(" — ") || "computer"
 
@@ -827,7 +833,7 @@ function observationResult(observation: PeekabooObservation): CallToolResult {
     content: [
       {
         type: "text",
-        text: `Observed ${target}.${data.truncated ? " The element list is partial; use computer_inspect with offset for the rest." : ""}`,
+        text: `Observed ${target}.${data.truncated ? " The element list is partial; use computer_inspect with offset for the rest." : ""}${savedPath ? ` Saved to ${savedPath}.` : ""}`,
       },
       {
         type: "image",

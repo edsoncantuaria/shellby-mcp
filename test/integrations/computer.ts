@@ -65,6 +65,15 @@ test("routes Computer Use through Peekaboo and preserves semantic errors", {
   )
   assert.deepEqual(observed.structuredContent, { snapshot_id: "snapshot-42" })
 
+  const savedPath = join(root, "nested", "saved.png")
+  const saved = await connected.client.callTool({
+    name: "computer_observe",
+    arguments: { app: "Safari", save_path: savedPath },
+  })
+  assert.equal(saved.isError, undefined)
+  assert.deepEqual(saved.structuredContent, { snapshot_id: "snapshot-42", saved_path: savedPath })
+  assert.equal((await readFile(savedPath)).subarray(1, 4).toString(), "PNG")
+
   const inspected = await connected.client.callTool({
     name: "computer_inspect",
     arguments: { snapshot_id: "snapshot-42", max_depth: 4, max_elements: 20, max_children: 10 },
@@ -398,6 +407,7 @@ test("only the GNOME helper publishes relative pointer motion", async (t) => {
     "computer_hold",
     "computer_clipboard",
     "computer_window_place",
+    "computer_show",
   ]) {
     assert.ok(
       tools.some((tool) => tool.name === name),

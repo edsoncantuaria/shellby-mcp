@@ -1,8 +1,8 @@
 /** biome-ignore-all lint/suspicious/noUnnecessaryConditions: Biome fails to track stopping across async lifecycle callbacks */
 import { execFile } from "node:child_process"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import process from "node:process"
 import { promisify } from "node:util"
 import { MCP_CONFIG } from "../../config.js"
@@ -60,6 +60,7 @@ export interface PeekabooObservationRequest {
   target: PeekabooObservationTarget
   annotate: boolean
   noWebFocus?: boolean
+  savePath?: string
 }
 
 export interface PeekabooInspectRequest {
@@ -283,6 +284,10 @@ export class PeekabooClient {
 
       try {
         const image = await readFile(imagePath)
+        if (request.savePath) {
+          await mkdir(dirname(request.savePath), { recursive: true })
+          await writeFile(request.savePath, image)
+        }
         const encodedImage = await encodeImageForMcp(image)
         return {
           ...result,
@@ -296,7 +301,7 @@ export class PeekabooClient {
         }
         throw peekabooErrorWithCause(
           "SCREENSHOT_READ_FAILED",
-          "Peekaboo completed but its screenshot could not be read or encoded.",
+          "Peekaboo completed but its screenshot could not be read, saved, or encoded.",
           unknownErrorMessage(error),
           error
         )

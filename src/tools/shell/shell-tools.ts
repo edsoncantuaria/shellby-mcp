@@ -33,7 +33,7 @@ export function registerShellExecutionTools(
   registerTool(
     "shell_run",
     {
-      description: `Run commands in a persistent configured shell. Provide exactly one of command or commands. Shells cwd start in ${workspaceDescription}. Use concise slugs for _id arguments.`,
+      description: `Run commands in a persistent configured shell. It runs in the background and never appears on the user's screen. Provide exactly one of command or commands. Shells cwd start in ${workspaceDescription}. Use concise slugs for _id arguments.`,
       inputSchema: shellRunInputSchema,
       outputSchema: shellRunOutputSchema,
       annotations: {

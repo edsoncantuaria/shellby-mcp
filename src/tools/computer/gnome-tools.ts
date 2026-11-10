@@ -1,10 +1,12 @@
 import { z } from "zod"
 import type { ToolRegistrar } from "../../mcp/tool-registration-boundary.js"
-import type { PeekabooClient } from "./peekaboo.js"
+import type { PeekabooClient, PeekabooObservationTarget } from "./peekaboo.js"
+import { SCREEN_IMAGE_META_KEY, SCREEN_VIEWER_URI } from "./screen-viewer.js"
 import {
   addTargetArgs,
   appInput,
   callPeekaboo,
+  peekabooToolError,
   targetFields,
   windowIdInput,
 } from "./tool-shared.js"
@@ -19,6 +21,40 @@ export function registerGnomeTools(registerTool: ToolRegistrar, peekaboo: Peekab
     idempotentHint: false,
     openWorldHint: false,
   }
+
+  registerTool(
+    "computer_show",
+    {
+      description:
+        "Show the user a screenshot of their desktop, an app, or a window in this chat. Use this whenever they ask to see their screen or for a print; computer_observe only shows it to you.",
+      inputSchema: z.object({ app: appInput.optional(), window_id: windowIdInput.optional() }),
+      nativeContent: true,
+      annotations: { ...action, readOnlyHint: true },
+      _meta: {
+        "openai/outputTemplate": SCREEN_VIEWER_URI,
+        "openai/toolInvocation/invoking": "Capturing the screen",
+        "openai/toolInvocation/invoked": "Screenshot ready",
+      },
+    },
+    async ({ app, window_id }, ctx) => {
+      let target: PeekabooObservationTarget = { kind: "screen", screenIndex: 0 }
+      if (window_id !== undefined)
+        target = { kind: "window", windowId: window_id, ...(app ? { app } : {}) }
+      else if (app !== undefined) target = { kind: "app", app }
+      try {
+        const { imageData, mimeType } = await peekaboo.observe(
+          { target, annotate: false, noWebFocus: true },
+          ctx.mcpReq.signal
+        )
+        return {
+          content: [{ type: "text" as const, text: "The screenshot is displayed to the user." }],
+          _meta: { [SCREEN_IMAGE_META_KEY]: `data:${mimeType};base64,${imageData}` },
+        }
+      } catch (error) {
+        return peekabooToolError(error)
+      }
+    }
+  )
 
   registerTool(
     "computer_move",

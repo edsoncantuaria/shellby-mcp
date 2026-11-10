@@ -7,6 +7,7 @@ import { registerComputerUseTools } from "../tools/computer/computer-tools.js"
 import type { PeekabooClient } from "../tools/computer/peekaboo.js"
 import type { PeekabooXClient } from "../tools/computer/peekaboox.js"
 import { registerPeekabooXTools } from "../tools/computer/peekaboox-tools.js"
+import { registerScreenViewer } from "../tools/computer/screen-viewer.js"
 import { registerCloneTools } from "../tools/delegation/clone-tools.js"
 import type { ChatGptDelegationService } from "../tools/delegation/contracts.js"
 import { registerSubagentTools } from "../tools/delegation/subagent-tools.js"
@@ -125,6 +126,7 @@ function createMcpServer(options: CreateMcpServerOptions, profile: McpRuntimePro
     if (options.peekaboox) registerPeekabooXTools(registerTool, options.peekaboox)
     else
       registerComputerUseTools(registerTool, requireCapabilityService(options.peekaboo, "computer"))
+    if (options.peekaboo?.executable.endsWith("shellby-desktop")) registerScreenViewer(server)
   }
   if (profile.tools.clones)
     registerCloneTools(registerTool, requireCapabilityService(options.chatGptDelegation, "clone"))
