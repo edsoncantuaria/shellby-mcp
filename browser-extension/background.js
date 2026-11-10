@@ -1,4 +1,5 @@
 import {
+  attachFiles,
   fillRef,
   focusIsSecret,
   focusRef,
@@ -6,6 +7,7 @@ import {
   pageText,
   scrollAt,
   snapshotPage,
+  viewportSize,
 } from "./page-scripts.js"
 import { classifyUrl, hmacHex, parseKeyCombo, redactUrl, siteKey } from "./policy.js"
 
@@ -16,6 +18,14 @@ const LOAD_TIMEOUT_MS = 15_000
 const CAPTURE_TIMEOUT_MS = 5_000
 const LOG_LIMIT = 200
 const WHEEL_TICK = 120
+const MAX_FRAMES_READ = 30
+const MAX_RECORDING_FRAMES = 120
+const MAX_RECORDING_CHARS = 24 * 1024 * 1024
+const RECORD_SETTLE_MS = 250
+const DRAG_STEPS = 10
+const SUBFRAME_REF = /^ref_(\d+)_\d+$/u
+const CONTEXT_GONE = /context/iu
+const NO_NODE = /no node/iu
 const MOUSE_BUTTONS = {
   click: { button: "left", clickCount: 1 },
   double_click: { button: "left", clickCount: 2 },
@@ -83,12 +93,20 @@ function disconnect() {
   ws?.close()
 }
 
+async function browserIdentity() {
+  const stored = await chrome.storage.local.get(["browserId", "browserName"])
+  const browserId = stored.browserId ?? crypto.randomUUID()
+  if (!stored.browserId) await chrome.storage.local.set({ browserId })
+  return { browser_id: browserId, name: stored.browserName || `Chrome ${browserId.slice(0, 4)}` }
+}
+
 async function onMessage(ws, link, message) {
   if (message.type === "challenge" && !link.nonce) {
     link.nonce = crypto.randomUUID() + crypto.randomUUID()
     link.challenge = message.nonce
     const proof = await hmacHex(link.secret, `client:${message.nonce}`)
-    ws.send(JSON.stringify({ type: "auth", proof, nonce: link.nonce }))
+    const identity = await browserIdentity()
+    ws.send(JSON.stringify({ type: "auth", proof, nonce: link.nonce, ...identity }))
     return
   }
   if (message.type === "authenticated" && link.nonce) {
@@ -153,6 +171,11 @@ async function askApproval(origin) {
   approvalWindows.set(origin, created.id)
 }
 
+async function originApproved(origin) {
+  const key = siteKey(origin)
+  return (await chrome.storage.local.get(key))[key] === "allow"
+}
+
 async function requireSite(url) {
   const verdict = classifyUrl(url)
   if (verdict.kind === "blank") return
@@ -182,25 +205,45 @@ async function readingTab(tabId, capture) {
 
 const sessions = new Map()
 
-function send(tabId, method, params) {
-  return chrome.debugger.sendCommand({ tabId }, method, params)
+function send(tabId, method, params, sessionId) {
+  return chrome.debugger.sendCommand(sessionId ? { tabId, sessionId } : { tabId }, method, params)
 }
 
 function attach(tabId) {
   let session = sessions.get(tabId)
   if (!session) {
-    session = { ready: startSession(tabId), consoleLog: [], network: new Map(), world: undefined }
+    session = {
+      ready: startSession(tabId),
+      consoleLog: [],
+      network: new Map(),
+      worlds: new Map(),
+      children: new Set(),
+      frameOrdinals: new Map(),
+      nextFrameOrdinal: 1,
+    }
     sessions.set(tabId, session)
     session.ready.catch(() => sessions.delete(tabId))
   }
   return session.ready.then(() => session)
 }
 
+function autoAttachFrames(tabId, sessionId) {
+  // Cross-site iframes run in their own renderer and are separate debugger targets.
+  return send(
+    tabId,
+    "Target.setAutoAttach",
+    { autoAttach: true, waitForDebuggerOnStart: false, flatten: true },
+    sessionId
+  )
+}
+
 async function startSession(tabId) {
   await chrome.debugger.attach({ tabId }, "1.3")
-  await Promise.all(["Page.enable", "Runtime.enable", "Network.enable"].map((m) => send(tabId, m)))
+  const domains = ["Page.enable", "DOM.enable", "Runtime.enable", "Network.enable"]
+  await Promise.all(domains.map((domain) => send(tabId, domain)))
   // Lets background tabs keep focus-dependent behavior without stealing the user's window.
   await send(tabId, "Emulation.setFocusEmulationEnabled", { enabled: true })
+  await autoAttachFrames(tabId)
 }
 
 function detachAll() {
@@ -242,12 +285,25 @@ const EVENT_HANDLERS = {
     pushBounded(session.consoleLog, { level: "error", text: text.slice(0, 2_000) })
   },
   "Runtime.executionContextsCleared": (session) => {
-    session.world = undefined
+    session.worlds.clear()
   },
-  "Page.frameNavigated": (session, { frame }) => {
-    if (frame.parentId) return
-    session.world = undefined
-    resetIfOriginChanged(session, frame.url)
+  "Page.frameNavigated": (session, { frame }, source) => {
+    session.worlds.delete(frame.id)
+    if (!frame.parentId && !source.sessionId) resetIfOriginChanged(session, frame.url)
+  },
+  "Input.dragIntercepted": (session, { data }) => {
+    session.dragData = data
+  },
+  "Target.attachedToTarget": (session, { sessionId, targetInfo }, { tabId }) => {
+    if (targetInfo.type !== "iframe") return
+    session.children.add(sessionId)
+    for (const domain of ["Page.enable", "DOM.enable"]) {
+      send(tabId, domain, undefined, sessionId).catch(() => undefined)
+    }
+    autoAttachFrames(tabId, sessionId).catch(() => undefined)
+  },
+  "Target.detachedFromTarget": (session, { sessionId }) => {
+    session.children.delete(sessionId)
   },
   "Network.requestWillBeSent": (session, { requestId, request, type }) => {
     session.network.set(requestId, {
@@ -268,27 +324,85 @@ const EVENT_HANDLERS = {
   },
 }
 
-async function isolatedWorld(tabId, session) {
-  if (session.world === undefined) {
-    const { frameTree } = await send(tabId, "Page.getFrameTree")
-    const { executionContextId } = await send(tabId, "Page.createIsolatedWorld", {
-      frameId: frameTree.frame.id,
-      worldName: "shellby",
-    })
-    session.world = executionContextId
+/** Every frame reachable in the tab, across the page and its out-of-process iframe targets. */
+async function listFrames(tabId, session) {
+  const frames = new Map()
+  let mainId
+  const collect = async (sessionId) => {
+    const { frameTree } = await send(tabId, "Page.getFrameTree", undefined, sessionId)
+    if (!sessionId) mainId = frameTree.frame.id
+    const walk = (node, sessionRoot) => {
+      frames.set(node.frame.id, {
+        id: node.frame.id,
+        parentId: node.frame.parentId,
+        url: node.frame.url,
+        sessionId,
+        sessionRoot,
+      })
+      for (const child of node.childFrames ?? []) walk(child, false)
+    }
+    walk(frameTree, true)
   }
-  return session.world
+  await collect()
+  // A frame also seen from its parent is owned by its own target, so those are collected last.
+  await Promise.all([...session.children].map((id) => collect(id).catch(() => undefined)))
+  for (const frame of frames.values()) {
+    if (frame.id === mainId) frame.ordinal = 0
+    else {
+      if (!session.frameOrdinals.has(frame.id))
+        session.frameOrdinals.set(frame.id, session.nextFrameOrdinal++)
+      frame.ordinal = session.frameOrdinals.get(frame.id)
+    }
+  }
+  return { frames, main: frames.get(mainId) }
 }
 
-async function runInWorld(tabId, fn, ...args) {
-  const session = await attach(tabId)
-  const contextId = await isolatedWorld(tabId, session)
+/** A subframe is its own site: being embedded in an approved page grants it nothing. */
+async function frameApproved(frame, frames) {
+  const verdict = classifyUrl(frame.url)
+  if (verdict.kind === "site") return originApproved(verdict.origin)
+  // about:blank, about:srcdoc, blob: and data: frames are authored by their parent.
+  const parent = frames.get(frame.parentId)
+  return parent ? frameApproved(parent, frames) : false
+}
+
+async function isolatedWorld(tabId, session, frame) {
+  let world = session.worlds.get(frame.id)
+  if (world === undefined) {
+    const { executionContextId } = await send(
+      tabId,
+      "Page.createIsolatedWorld",
+      { frameId: frame.id, worldName: "shellby" },
+      frame.sessionId
+    )
+    world = executionContextId
+    session.worlds.set(frame.id, world)
+  }
+  return world
+}
+
+async function evaluateInWorld(tabId, session, frame, expression) {
+  const contextId = await isolatedWorld(tabId, session, frame)
+  return send(
+    tabId,
+    "Runtime.evaluate",
+    { expression, contextId, returnByValue: true, awaitPromise: true },
+    frame.sessionId
+  )
+}
+
+async function runInFrame(tabId, session, frame, fn, ...args) {
   const expression = `(${fn.toString()})(...${JSON.stringify(args)})`
-  const { result, exceptionDetails } = await send(tabId, "Runtime.evaluate", {
-    expression,
-    contextId,
-    returnByValue: true,
-    awaitPromise: true,
+  const { result, exceptionDetails } = await evaluateInWorld(
+    tabId,
+    session,
+    frame,
+    expression
+  ).catch((error) => {
+    // A cached world dies with its document; one retry covers navigation races.
+    if (!CONTEXT_GONE.test(error.message)) throw error
+    session.worlds.delete(frame.id)
+    return evaluateInWorld(tabId, session, frame, expression)
   })
   if (exceptionDetails) {
     throw new CommandError(
@@ -297,6 +411,49 @@ async function runInWorld(tabId, fn, ...args) {
     )
   }
   return result.value
+}
+
+/** The frame a ref belongs to, refusing frames the user has not approved. */
+async function frameForRef(tabId, ref) {
+  const session = await attach(tabId)
+  const context = await listFrames(tabId, session)
+  const match = ref ? SUBFRAME_REF.exec(ref) : undefined
+  if (!match) return { session, context, frame: context.main }
+  const ordinal = Number(match[1])
+  const frame = [...context.frames.values()].find((item) => item.ordinal === ordinal)
+  if (!frame) throw new CommandError("STALE_REF", `${ref} is gone. Call browser_read again.`)
+  if (!(await frameApproved(frame, context.frames)))
+    throw new CommandError("FRAME_NOT_APPROVED", `${ref} is in a frame the user has not approved.`)
+  return { session, context, frame }
+}
+
+/** Where a frame's viewport origin sits in the top-level viewport used for input events. */
+async function frameOffset(tabId, session, frame, context) {
+  if (frame.id === context.main.id) return { x: 0, y: 0 }
+  for (const sessionId of [undefined, ...session.children]) {
+    const box = await ownerBox(tabId, frame.id, sessionId)
+    if (box) {
+      if (!sessionId) return box
+      // Box models are relative to their own target, so nested targets add up.
+      const root = [...context.frames.values()].find(
+        (item) => item.sessionId === sessionId && item.sessionRoot
+      )
+      const base = await frameOffset(tabId, session, root, context)
+      return { x: box.x + base.x, y: box.y + base.y }
+    }
+  }
+  throw new CommandError("FRAME_GONE", "That frame is no longer in the page.")
+}
+
+async function ownerBox(tabId, frameId, sessionId) {
+  try {
+    const { backendNodeId } = await send(tabId, "DOM.getFrameOwner", { frameId }, sessionId)
+    await send(tabId, "DOM.scrollIntoViewIfNeeded", { backendNodeId }, sessionId)
+    const { model } = await send(tabId, "DOM.getBoxModel", { backendNodeId }, sessionId)
+    return { x: model.content[0], y: model.content[1] }
+  } catch {
+    // Expected: this target does not own the frame, so the caller tries the next one.
+  }
 }
 
 // ---- Commands -----------------------------------------------------------------------------------
@@ -374,15 +531,63 @@ async function navigate({ tabId, url, history }) {
   await waitForLoad(tabId)
   const tab = await requireTab(tabId)
   await requireSite(tab.url)
+  await captureRecordingFrame(tabId)
   return describeTab(tab)
 }
 
-function read({ tabId, format, query, interactiveOnly, maxChars }) {
-  return readingTab(tabId, () =>
-    format === "text"
-      ? runInWorld(tabId, pageText, { maxChars })
-      : runInWorld(tabId, snapshotPage, { interactiveOnly, query, maxChars })
-  )
+function originOf(frame) {
+  const verdict = classifyUrl(frame.url)
+  return verdict.kind === "site" ? verdict.origin : frame.url
+}
+
+async function readFrame(tabId, session, frame, options) {
+  const refPrefix = frame.ordinal === 0 ? "" : `${frame.ordinal}_`
+  if (options.format === "text") {
+    const page = await runInFrame(tabId, session, frame, pageText, options)
+    return { ...page, body: page.text }
+  }
+  const page = await runInFrame(tabId, session, frame, snapshotPage, { ...options, refPrefix })
+  return { ...page, body: page.tree }
+}
+
+function read({ tabId, format, query, interactiveOnly, maxChars, requestFrameOrigin }) {
+  return readingTab(tabId, async () => {
+    const session = await attach(tabId)
+    const context = await listFrames(tabId, session)
+    const { frames, main } = context
+    if (requestFrameOrigin) {
+      const present = [...frames.values()].some((item) => originOf(item) === requestFrameOrigin)
+      if (!present)
+        throw new CommandError("FRAME_NOT_FOUND", `No frame from ${requestFrameOrigin} is here.`)
+      await requireSite(requestFrameOrigin)
+    }
+
+    const options = { format, query, interactiveOnly, maxChars }
+    const top = await readFrame(tabId, session, main, options)
+    const sections = [top.body]
+    let remaining = maxChars - top.body.length
+    let truncated = top.truncated
+    const subframes = [...frames.values()].filter((item) => item.id !== main.id)
+    for (const frame of subframes.slice(0, MAX_FRAMES_READ)) {
+      if (remaining <= 0) {
+        truncated = true
+        break
+      }
+      if (await frameApproved(frame, frames)) {
+        const page = await readFrame(tabId, session, frame, { ...options, maxChars: remaining })
+          // A frame can vanish mid-read; the rest of the page is still worth returning.
+          .catch(() => ({ body: "(frame unavailable)", truncated: false }))
+        sections.push(`--- frame ${frame.ordinal} ${frame.url.slice(0, 200)}\n${page.body}`)
+        remaining -= page.body.length
+        truncated ||= page.truncated
+      } else {
+        sections.push(
+          `--- frame ${frame.ordinal} ${originOf(frame).slice(0, 200)} (not approved; use request_frame_origin to ask the user)`
+        )
+      }
+    }
+    return { url: top.url, title: top.title, content: sections.join("\n"), truncated }
+  })
 }
 
 function timeout(promise, ms) {
@@ -394,19 +599,89 @@ function timeout(promise, ms) {
   ])
 }
 
+async function captureTab(tabId, quality) {
+  const capture = () => send(tabId, "Page.captureScreenshot", { format: "jpeg", quality })
+  const { data } = await timeout(capture(), CAPTURE_TIMEOUT_MS).catch(async (error) => {
+    if (error.code !== "CAPTURE_TIMEOUT") throw error
+    // Chrome may not paint a hidden tab; showing it is the only way to get pixels.
+    await chrome.tabs.update(tabId, { active: true })
+    return timeout(capture(), CAPTURE_TIMEOUT_MS)
+  })
+  return data
+}
+
+/** The captured area in CSS pixels. Layout metrics would leave out the scrollbars it includes. */
+async function viewport(tabId) {
+  const session = await attach(tabId)
+  const { main } = await listFrames(tabId, session)
+  return runInFrame(tabId, session, main, viewportSize)
+}
+
 function screenshot({ tabId }) {
   return readingTab(tabId, async () => {
     await attach(tabId)
-    const { cssLayoutViewport } = await send(tabId, "Page.getLayoutMetrics")
-    const capture = () => send(tabId, "Page.captureScreenshot", { format: "jpeg", quality: 85 })
-    const { data } = await timeout(capture(), CAPTURE_TIMEOUT_MS).catch(async (error) => {
-      if (error.code !== "CAPTURE_TIMEOUT") throw error
-      // Chrome may not paint a hidden tab; showing it is the only way to get pixels.
-      await chrome.tabs.update(tabId, { active: true })
-      return timeout(capture(), CAPTURE_TIMEOUT_MS)
-    })
-    return { data, width: cssLayoutViewport.clientWidth, height: cssLayoutViewport.clientHeight }
+    const size = await viewport(tabId)
+    return { data: await captureTab(tabId, 85), ...size }
   })
+}
+
+async function resize({ tabId, width, height, reset }) {
+  await requireSite((await requireTab(tabId)).url)
+  await attach(tabId)
+  if (reset) await send(tabId, "Emulation.clearDeviceMetricsOverride")
+  else {
+    await send(tabId, "Emulation.setDeviceMetricsOverride", {
+      width,
+      height,
+      deviceScaleFactor: 0,
+      mobile: false,
+    })
+  }
+  return viewport(tabId)
+}
+
+async function captureRecordingFrame(tabId) {
+  const session = sessions.get(tabId)
+  const recording = session?.recording
+  if (!recording) return
+  try {
+    await sleep(RECORD_SETTLE_MS)
+    const verdict = classifyUrl((await requireTab(tabId)).url)
+    // Recording must never capture a site the user has not approved.
+    if (verdict.kind === "site" && !(await originApproved(verdict.origin))) {
+      recording.skipped += 1
+      return
+    }
+    const data = await captureTab(tabId, 60)
+    recording.frames.push(data)
+    recording.chars += data.length
+    while (
+      recording.frames.length > MAX_RECORDING_FRAMES ||
+      recording.chars > MAX_RECORDING_CHARS
+    ) {
+      recording.chars -= recording.frames.shift().length
+      recording.skipped += 1
+    }
+  } catch {
+    // A lost frame must not fail the user-visible action that triggered it.
+    recording.skipped += 1
+  }
+}
+
+async function record({ tabId, action }) {
+  await requireSite((await requireTab(tabId)).url)
+  const session = await attach(tabId)
+  if (action === "start") {
+    session.recording = { frames: [], chars: 0, skipped: 0 }
+    await captureRecordingFrame(tabId)
+    return "recording"
+  }
+  const recording = session.recording
+  if (!recording) throw new CommandError("NOT_RECORDING", "This tab is not being recorded.")
+  session.recording = undefined
+  if (action === "discard") return "discarded"
+  await captureRecordingFrame(tabId)
+  return { frames: recording.frames, skipped: recording.skipped }
 }
 
 function assertFresh(outcome, ref) {
@@ -415,9 +690,37 @@ function assertFresh(outcome, ref) {
   return outcome
 }
 
+/** Coordinates can land in an embedded frame, which needs the same approval as a ref would. */
+async function refuseUnapprovedPoint(tabId, session, point) {
+  let located
+  try {
+    located = await send(tabId, "DOM.getNodeForLocation", {
+      x: Math.round(point.x),
+      y: Math.round(point.y),
+    })
+  } catch (error) {
+    if (NO_NODE.test(error.message)) return
+    throw error
+  }
+  const { node } = await send(tabId, "DOM.describeNode", { backendNodeId: located.backendNodeId })
+  const { frames } = await listFrames(tabId, session)
+  const frame = frames.get(node.frameId ?? located.frameId)
+  if (frame && !(await frameApproved(frame, frames)))
+    throw new CommandError(
+      "FRAME_NOT_APPROVED",
+      "That point is in a frame the user has not approved."
+    )
+}
+
 async function pointFor(tabId, { ref, x, y }) {
-  if (!ref) return { x, y }
-  return assertFresh(await runInWorld(tabId, locateRef, ref), ref)
+  if (!ref) {
+    await refuseUnapprovedPoint(tabId, await attach(tabId), { x, y })
+    return { x, y }
+  }
+  const { session, context, frame } = await frameForRef(tabId, ref)
+  const local = assertFresh(await runInFrame(tabId, session, frame, locateRef, ref), ref)
+  const offset = await frameOffset(tabId, session, frame, context)
+  return { x: local.x + offset.x, y: local.y + offset.y }
 }
 
 function mouse(tabId, type, point, extra) {
@@ -434,7 +737,13 @@ async function mouseAction(tabId, params) {
 }
 
 async function refuseIfSecretFocused(tabId) {
-  if (await runInWorld(tabId, focusIsSecret)) {
+  const session = await attach(tabId)
+  const { frames } = await listFrames(tabId, session)
+  // Payment forms usually live in a cross-site iframe, so every frame has to be asked.
+  const checks = [...frames.values()].map((frame) =>
+    runInFrame(tabId, session, frame, focusIsSecret).catch(() => false)
+  )
+  if ((await Promise.all(checks)).some(Boolean)) {
     throw new CommandError(
       "SECRET_FIELD",
       "The focused field holds a password or payment value. Ask the user to fill it."
@@ -443,7 +752,12 @@ async function refuseIfSecretFocused(tabId) {
 }
 
 async function typeAction(tabId, { ref, text }) {
-  if (ref) assertFresh(await runInWorld(tabId, focusRef, ref), ref)
+  if (ref) {
+    const { session, frame } = await frameForRef(tabId, ref)
+    assertFresh(await runInFrame(tabId, session, frame, focusRef, ref), ref)
+    // Script focus does not move keyboard focus into another frame; a real click does.
+    if (frame.ordinal !== 0) await mouseAction(tabId, { ref, action: "click" })
+  }
   await refuseIfSecretFocused(tabId)
   await send(tabId, "Input.insertText", { text })
 }
@@ -467,7 +781,8 @@ async function keyAction(tabId, { key }) {
 }
 
 async function fillAction(tabId, { ref, value }) {
-  const outcome = assertFresh(await runInWorld(tabId, fillRef, ref, value), ref)
+  const { session, frame } = await frameForRef(tabId, ref)
+  const outcome = assertFresh(await runInFrame(tabId, session, frame, fillRef, ref, value), ref)
   if (outcome.secret)
     throw new CommandError("SECRET_FIELD", "That field holds a password or payment value.")
   if (outcome.unsupported)
@@ -475,16 +790,70 @@ async function fillAction(tabId, { ref, value }) {
   if (outcome.noOption) throw new CommandError("NO_OPTION", `No option matches ${value}.`)
 }
 
-async function scrollAction(tabId, { x, y, direction, amount = 3 }) {
+async function scrollAction(tabId, { ref, x, y, direction, amount = 3 }) {
   const [horizontal, vertical] = SCROLL_DELTAS[direction]
   const distance = amount * WHEEL_TICK
+  const { session, frame } = await frameForRef(tabId, ref)
+  const local = ref
+    ? assertFresh(await runInFrame(tabId, session, frame, locateRef, ref), ref)
+    : { x, y }
   // Synthetic wheel events need a painting compositor, so they do nothing in a background tab.
-  await runInWorld(tabId, scrollAt, {
-    x,
-    y,
+  await runInFrame(tabId, session, frame, scrollAt, {
+    ...local,
     left: horizontal * distance,
     top: vertical * distance,
   })
+}
+
+async function dragAction(tabId, params) {
+  const session = await attach(tabId)
+  const to = await pointFor(tabId, { ref: params.to_ref, x: params.to_x, y: params.to_y })
+  const from = await pointFor(tabId, params)
+  const held = { button: "left", buttons: 1 }
+  session.dragData = undefined
+  // HTML5 drag sources start an OS-level drag that synthetic mouse moves cannot complete.
+  await send(tabId, "Input.setInterceptDrags", { enabled: true })
+  try {
+    await mouse(tabId, "mouseMoved", from)
+    await mouse(tabId, "mousePressed", from, { ...held, clickCount: 1 })
+    for (let step = 1; step <= DRAG_STEPS; step += 1) {
+      const progress = step / DRAG_STEPS
+      await mouse(
+        tabId,
+        "mouseMoved",
+        { x: from.x + (to.x - from.x) * progress, y: from.y + (to.y - from.y) * progress },
+        held
+      )
+      if (step === 1) await sleep(100)
+      if (session.dragData) break
+    }
+    if (session.dragData) {
+      for (const type of ["dragEnter", "dragOver", "drop"]) {
+        await send(tabId, "Input.dispatchDragEvent", { type, ...to, data: session.dragData })
+      }
+    }
+    await mouse(tabId, "mouseReleased", to, { button: "left", clickCount: 1 })
+  } finally {
+    session.dragData = undefined
+    await send(tabId, "Input.setInterceptDrags", { enabled: false }).catch(() => undefined)
+  }
+}
+
+async function upload({ tabId, ref, files }) {
+  await requireSite((await requireTab(tabId)).url)
+  const { session, frame } = await frameForRef(tabId, ref)
+  const outcome = await runInFrame(tabId, session, frame, attachFiles, ref, files)
+  assertFresh(outcome, ref)
+  if (outcome.inputCount !== undefined) {
+    throw new CommandError(
+      "FILE_INPUT_AMBIGUOUS",
+      `The page has ${outcome.inputCount} file inputs. Pass the ref of the right one.`
+    )
+  }
+  if (outcome.notFileInput) throw new CommandError("NOT_FILE_INPUT", `${ref} is not a file input.`)
+  if (outcome.singleOnly) throw new CommandError("SINGLE_FILE_ONLY", "That input accepts one file.")
+  await captureRecordingFrame(tabId)
+  return "attached"
 }
 
 const ACTIONS = {
@@ -497,12 +866,14 @@ const ACTIONS = {
   fill: fillAction,
   scroll: scrollAction,
   scroll_to: pointFor,
+  drag: dragAction,
 }
 
 async function act({ tabId, ...params }) {
   await requireSite((await requireTab(tabId)).url)
   await attach(tabId)
   await ACTIONS[params.action](tabId, params)
+  await captureRecordingFrame(tabId)
   return "done"
 }
 
@@ -545,6 +916,9 @@ const METHODS = new Map([
   ["navigate", navigate],
   ["read", read],
   ["screenshot", screenshot],
+  ["resize", resize],
+  ["upload", upload],
+  ["record", record],
   ["act", act],
   ["evaluate", evaluate],
   ["logs", logs],
@@ -552,9 +926,9 @@ const METHODS = new Map([
 
 // ---- Browser events: registered synchronously so a restarted worker receives them --------------
 
-chrome.debugger.onEvent.addListener(({ tabId }, method, params) => {
-  const session = sessions.get(tabId)
-  if (session) EVENT_HANDLERS[method]?.(session, params)
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  const session = sessions.get(source.tabId)
+  if (session) EVENT_HANDLERS[method]?.(session, params, source)
 })
 
 chrome.debugger.onDetach.addListener(({ tabId }, reason) => {
@@ -581,7 +955,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
 })
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !(changes.pairing || changes.paused)) return
+  if (area !== "local" || !(changes.pairing || changes.paused || changes.browserName)) return
   disconnect()
   connect()
 })

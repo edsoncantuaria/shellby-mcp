@@ -202,7 +202,7 @@ The `browser_*` tools drive your everyday Chrome, with its logins, through the e
 2. In `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and select the `browser-extension` folder.
 3. Run `npm run browser:pair` and paste the code into the extension's popup.
 
-The agent only sees tabs in the green **Shellby** tab group. The first time it reaches a site, Chrome asks you to allow or deny that site. The popup can pause the bridge and forget a site, and dismissing Chrome's debugging banner removes that tab from the group.
+The agent only sees tabs in the green **Shellby** tab group. The first time it reaches a site, Chrome asks you to allow or deny that site, and an iframe from another site needs its own approval. To connect another Chrome profile, load the extension there, use the same code, and give it a name in the popup. The popup can pause the bridge and forget a site, and dismissing Chrome's debugging banner removes that tab from the group.
 
 See [Chrome Bridge](wiki/pages/tools/browser.md) for the trust model.
 

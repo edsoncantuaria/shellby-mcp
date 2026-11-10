@@ -46,13 +46,27 @@ function open(bridge: BrowserBridge, origin = ORIGIN): WebSocket {
   return new WebSocket(`ws://127.0.0.1:${bridge.port}/`, { origin })
 }
 
-async function pair(bridge: BrowserBridge, secret = SECRET) {
+const FIRST_BROWSER = "11111111-1111-4111-8111-111111111111"
+const SECOND_BROWSER = "22222222-2222-4222-8222-222222222222"
+
+async function pair(
+  bridge: BrowserBridge,
+  secret = SECRET,
+  browserId = FIRST_BROWSER,
+  name = "Home"
+) {
   const socket = open(bridge)
   const challenge = await nextMessage(socket)
   const nonce = randomBytes(32).toString("hex")
   const reply = nextMessage(socket)
   socket.send(
-    JSON.stringify({ type: "auth", proof: hmac(secret, `client:${challenge.nonce}`), nonce })
+    JSON.stringify({
+      type: "auth",
+      proof: hmac(secret, `client:${challenge.nonce}`),
+      nonce,
+      browser_id: browserId,
+      name,
+    })
   )
   return { socket, challenge, nonce, reply }
 }
@@ -126,6 +140,38 @@ test("rejects in-flight calls on disconnect, timeout, and abort", async (t) => {
   const dropped = bridge.call("read", {})
   socket.close()
   await assert.rejects(dropped, { code: "EXTENSION_DISCONNECTED" })
+})
+
+test("routes calls by browser when several are connected", async (t) => {
+  const bridge = await startBridge(t)
+  const home = await pair(bridge)
+  await home.reply
+  const work = await pair(bridge, SECRET, SECOND_BROWSER, "Work")
+  await work.reply
+  assert.deepEqual(bridge.browsers(), [
+    { id: FIRST_BROWSER, name: "Home" },
+    { id: SECOND_BROWSER, name: "Work" },
+  ])
+
+  await assert.rejects(bridge.call("read", {}), { code: "BROWSER_AMBIGUOUS" })
+  await assert.rejects(bridge.call("read", {}, undefined, "Nope"), { code: "UNKNOWN_BROWSER" })
+
+  const incoming = nextMessage(work.socket)
+  const call = bridge.call<string>("read", {}, undefined, "work")
+  const request = await incoming
+  // A result is only trusted from the browser the call went to.
+  home.socket.send(JSON.stringify({ type: "result", id: request.id, ok: true, result: "forged" }))
+  work.socket.send(JSON.stringify({ type: "result", id: request.id, ok: true, result: "real" }))
+  assert.equal(await call, "real")
+
+  const homeClosed = closed(home.socket)
+  home.socket.close()
+  await homeClosed
+  await new Promise((resolve) => {
+    setTimeout(resolve, 10)
+  })
+  assert.deepEqual(bridge.browsers(), [{ id: SECOND_BROWSER, name: "Work" }])
+  work.socket.close()
 })
 
 test("a newer authenticated connection replaces the old one", async (t) => {
