@@ -1,7 +1,7 @@
 // Each export is serialized with toString() and run inside the tab's isolated world, where the page
 // cannot read or replace the ref table. They must stay self-contained: no imports, no shared helpers.
 
-export function snapshotPage({ interactiveOnly, query, maxChars }) {
+export function snapshotPage({ interactiveOnly, query, maxChars, refPrefix }) {
   globalThis.__shellbyRefs ??= { next: 1, byElement: new WeakMap(), byRef: new Map() }
   const refs = globalThis.__shellbyRefs
   const INTERACTIVE = new Set([
@@ -38,6 +38,7 @@ export function snapshotPage({ interactiveOnly, query, maxChars }) {
     H5: "heading",
     H6: "heading",
     HEADER: "banner",
+    IFRAME: "iframe",
     IMG: "img",
     MAIN: "main",
     NAV: "navigation",
@@ -50,6 +51,7 @@ export function snapshotPage({ interactiveOnly, query, maxChars }) {
   const INPUT_ROLES = {
     button: "button",
     checkbox: "checkbox",
+    file: "button",
     number: "spinbutton",
     radio: "radio",
     range: "slider",
@@ -96,7 +98,7 @@ export function snapshotPage({ interactiveOnly, query, maxChars }) {
   const refOf = (el) => {
     let ref = refs.byElement.get(el)
     if (!ref) {
-      ref = `ref_${refs.next++}`
+      ref = `ref_${refPrefix}${refs.next++}`
       refs.byElement.set(el, ref)
       refs.byRef.set(ref, new WeakRef(el))
     }
@@ -114,6 +116,7 @@ export function snapshotPage({ interactiveOnly, query, maxChars }) {
     if (el.value && typeof el.value === "string" && !isSecret(el) && el.tagName !== "BUTTON")
       parts.push(`value=${JSON.stringify(clean(el.value, 120))}`)
     if (isSecret(el)) parts.push("secret")
+    if (el.type === "file") parts.push("file-input")
     return parts.length > 0 ? ` ${parts.join(" ")}` : ""
   }
 
@@ -144,12 +147,12 @@ export function snapshotPage({ interactiveOnly, query, maxChars }) {
     }
     if (node.nodeType !== Node.ELEMENT_NODE || SKIPPED.has(node.tagName)) return
     const style = getComputedStyle(node)
-    if (
+    const hidden =
       style.display === "none" ||
       style.visibility === "hidden" ||
       node.getAttribute("aria-hidden") === "true"
-    )
-      return
+    // Styled upload buttons usually hide the real input, which is still the upload target.
+    if (hidden && !(node.tagName === "INPUT" && node.type === "file")) return
     const role = roleOf(node)
     let childDepth = depth
     if (role && (!interactiveOnly || INTERACTIVE.has(role))) {
@@ -180,8 +183,12 @@ export function pageText({ maxChars }) {
 export function locateRef(ref) {
   const el = globalThis.__shellbyRefs?.byRef.get(ref)?.deref()
   if (!el?.isConnected) return { stale: true }
-  el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" })
-  const rect = el.getBoundingClientRect()
+  let rect = el.getBoundingClientRect()
+  // Leave visible elements alone so a drag's two endpoints do not move each other.
+  if (rect.top < 0 || rect.left < 0 || rect.bottom > innerHeight || rect.right > innerWidth) {
+    el.scrollIntoView({ block: "center", inline: "center", behavior: "instant" })
+    rect = el.getBoundingClientRect()
+  }
   return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
 }
 
@@ -245,4 +252,33 @@ export function fillRef(ref, value) {
   el.dispatchEvent(new Event("input", { bubbles: true }))
   el.dispatchEvent(new Event("change", { bubbles: true }))
   return {}
+}
+
+export function attachFiles(ref, files) {
+  let el
+  if (ref) {
+    el = globalThis.__shellbyRefs?.byRef.get(ref)?.deref()
+    if (!el?.isConnected) return { stale: true }
+  } else {
+    const inputs = document.querySelectorAll('input[type="file"]')
+    if (inputs.length !== 1) return { inputCount: inputs.length }
+    el = inputs[0]
+  }
+  if (el.tagName !== "INPUT" || el.type !== "file") return { notFileInput: true }
+  if (files.length > 1 && !el.multiple) return { singleOnly: true }
+  const transfer = new DataTransfer()
+  for (const { name, type, data } of files) {
+    const binary = atob(data)
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+    transfer.items.add(new File([bytes], name, { type }))
+  }
+  el.files = transfer.files
+  el.dispatchEvent(new Event("input", { bubbles: true }))
+  el.dispatchEvent(new Event("change", { bubbles: true }))
+  return {}
+}
+
+export function viewportSize() {
+  return { width: innerWidth, height: innerHeight }
 }

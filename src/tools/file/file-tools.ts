@@ -98,7 +98,7 @@ export function registerFileWriteTool(registerTool: ToolRegistrar): void {
   )
 }
 
-function resolveLocalPath(path: string): string {
+export function resolveLocalPath(path: string): string {
   return isAbsolute(path) ? path : resolve(MCP_CONFIG.workspace, path)
 }
 

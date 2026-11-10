@@ -13,6 +13,8 @@ const authMessage = z.object({
   type: z.literal("auth"),
   proof: z.string(),
   nonce: z.string().min(32),
+  browser_id: z.uuid(),
+  name: z.string().trim().min(1).max(60),
 })
 
 const resultMessage = z.object({
@@ -43,11 +45,23 @@ export interface BrowserBridgeOptions {
 }
 
 interface PendingCall {
+  socket: WebSocket
   resolve: (value: unknown) => void
   reject: (error: Error) => void
 }
 
-export type BrowserCaller = Pick<BrowserBridge, "call">
+interface BrowserConnection {
+  id: string
+  name: string
+  socket: WebSocket
+}
+
+export interface ConnectedBrowser {
+  id: string
+  name: string
+}
+
+export type BrowserCaller = Pick<BrowserBridge, "call" | "browsers">
 
 /**
  * Loopback channel to the Shellby Chrome extension. It listens on its own port so the public
@@ -57,7 +71,7 @@ export type BrowserCaller = Pick<BrowserBridge, "call">
 export class BrowserBridge {
   private readonly options: BrowserBridgeOptions
   private server: WebSocketServer | undefined
-  private active: WebSocket | undefined
+  private readonly connections = new Map<string, BrowserConnection>()
   private readonly pending = new Map<number, PendingCall>()
   private nextId = 0
 
@@ -99,7 +113,9 @@ export class BrowserBridge {
   async close(): Promise<void> {
     const server = this.server
     this.server = undefined
-    this.rejectPending("Shellby is shutting down.")
+    for (const call of [...this.pending.values()]) {
+      call.reject(new BrowserBridgeError("EXTENSION_DISCONNECTED", "Shellby is shutting down."))
+    }
     if (!server) return
     for (const client of server.clients) client.terminate()
     await new Promise<void>((resolve, reject) => {
@@ -110,15 +126,22 @@ export class BrowserBridge {
     })
   }
 
-  call<T>(method: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    const socket = this.active
-    if (!socket) {
-      return Promise.reject(
-        new BrowserBridgeError(
-          "EXTENSION_DISCONNECTED",
-          "The Shellby Chrome extension is not connected. Ask the user to open Chrome and pair the extension with `npm run browser:pair`."
-        )
-      )
+  browsers(): ConnectedBrowser[] {
+    return [...this.connections.values()].map(({ id, name }) => ({ id, name }))
+  }
+
+  /** `browser` is a name or ID, and may be omitted only while one browser is connected. */
+  call<T>(
+    method: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal,
+    browser?: string
+  ): Promise<T> {
+    let socket: WebSocket
+    try {
+      socket = this.select(browser).socket
+    } catch (error) {
+      return Promise.reject(error)
     }
     if (signal?.aborted) return Promise.reject(abortError())
 
@@ -139,6 +162,7 @@ export class BrowserBridge {
       }, this.options.callTimeoutMs ?? CALL_TIMEOUT_MS)
       signal?.addEventListener("abort", onAbort, { once: true })
       this.pending.set(id, {
+        socket,
         resolve: (value) => {
           settle()
           // biome-ignore lint/nursery/noUnsafeTypeAssertion: each method's caller owns its result shape.
@@ -169,32 +193,62 @@ export class BrowserBridge {
       }
       const proof = this.hmac(`server:${serverNonce}:${auth.data.nonce}`)
       socket.send(JSON.stringify({ type: "authenticated", proof }))
-      this.adopt(socket)
+      this.adopt({ id: auth.data.browser_id, name: auth.data.name, socket })
     })
     socket.send(JSON.stringify({ type: "challenge", nonce: serverNonce }))
   }
 
-  private adopt(socket: WebSocket): void {
-    const previous = this.active
-    this.active = socket
-    if (previous) {
-      this.rejectPending("The Chrome extension reconnected.")
-      previous.close(CLOSE_REPLACED)
+  private select(browser: string | undefined): BrowserConnection {
+    const connected = [...this.connections.values()]
+    if (connected.length === 0) {
+      throw new BrowserBridgeError(
+        "EXTENSION_DISCONNECTED",
+        "The Shellby Chrome extension is not connected. Ask the user to open Chrome and pair the extension with `npm run browser:pair`."
+      )
     }
-    socket.on("message", (data) => this.receive(data))
+    const names = connected.map(({ name }) => name).join(", ")
+    if (browser === undefined) {
+      const [only] = connected
+      if (only && connected.length === 1) return only
+      throw new BrowserBridgeError(
+        "BROWSER_AMBIGUOUS",
+        `Several browsers are connected (${names}). Pass browser.`
+      )
+    }
+    const wanted = browser.toLowerCase()
+    const matches = connected.filter(
+      ({ id, name }) => id === browser || name.toLowerCase() === wanted
+    )
+    const [match] = matches
+    if (match && matches.length === 1) return match
+    throw new BrowserBridgeError(
+      "UNKNOWN_BROWSER",
+      `No single browser matches ${browser}. Connected: ${names}.`
+    )
+  }
+
+  private adopt(connection: BrowserConnection): void {
+    const { id, socket } = connection
+    const previous = this.connections.get(id)
+    this.connections.set(id, connection)
+    if (previous) {
+      this.rejectPending(previous.socket, "The Chrome extension reconnected.")
+      previous.socket.close(CLOSE_REPLACED)
+    }
+    socket.on("message", (data) => this.receive(socket, data))
     socket.once("close", () => {
-      if (this.active !== socket) return
-      this.active = undefined
-      this.rejectPending("The Chrome extension disconnected.")
+      if (this.connections.get(id)?.socket !== socket) return
+      this.connections.delete(id)
+      this.rejectPending(socket, "The Chrome extension disconnected.")
     })
     log("info", "browser.extension_connected")
   }
 
-  private receive(data: RawData): void {
+  private receive(socket: WebSocket, data: RawData): void {
     const message = resultMessage.safeParse(parseJson(data))
     if (!message.success) return // Keepalive pings carry no result.
     const call = this.pending.get(message.data.id)
-    if (!call) return
+    if (call?.socket !== socket) return
     if (message.data.ok) call.resolve(message.data.result)
     else {
       const { code = "EXTENSION_ERROR", message: text = "The extension reported a failure." } =
@@ -203,9 +257,11 @@ export class BrowserBridge {
     }
   }
 
-  private rejectPending(reason: string): void {
-    for (const call of [...this.pending.values()])
-      call.reject(new BrowserBridgeError("EXTENSION_DISCONNECTED", reason))
+  private rejectPending(socket: WebSocket, reason: string): void {
+    for (const call of [...this.pending.values()]) {
+      if (call.socket === socket)
+        call.reject(new BrowserBridgeError("EXTENSION_DISCONNECTED", reason))
+    }
   }
 
   private hmac(value: string): string {

@@ -7,6 +7,8 @@ async function render() {
   const stored = await chrome.storage.local.get(null)
   document.getElementById("status").textContent = status
   document.getElementById("pause").textContent = stored.paused ? "Resume" : "Pause"
+  const nameField = document.getElementById("browser-name")
+  if (document.activeElement !== nameField) nameField.value = stored.browserName ?? ""
 
   const sites = Object.entries(stored).filter(([key]) => key.startsWith(SITE_PREFIX))
   const list = document.getElementById("sites")
@@ -32,6 +34,10 @@ document.getElementById("pair-form").addEventListener("submit", async (event) =>
   if (!pairing) return
   field.value = ""
   await chrome.storage.local.set({ pairing })
+})
+
+document.getElementById("browser-name").addEventListener("change", (event) => {
+  chrome.storage.local.set({ browserName: event.target.value.trim() })
 })
 
 document.getElementById("pause").addEventListener("click", async () => {
