@@ -1,11 +1,10 @@
 import { getAgentIdentity } from "../../agent/context.js"
 import { ChatGptDelegationError, type ChatGptDelegationService } from "./contracts.js"
-import type { GeminiDelegationService } from "./gemini-service.js"
 
 /** Sends each delegated agent to the chat product its caller is running in. */
 export function createDelegationRouter(
   chatGpt: ChatGptDelegationService,
-  gemini: GeminiDelegationService
+  gemini: Omit<ChatGptDelegationService, "ensureProject">
 ): ChatGptDelegationService {
   const forCaller = () => (getAgentIdentity()?.provider === "gemini" ? gemini : chatGpt)
 

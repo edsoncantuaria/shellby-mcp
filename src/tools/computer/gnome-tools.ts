@@ -1,6 +1,7 @@
 import { z } from "zod"
-import { getAgentIdentity } from "../../agent/context.js"
+import { agentChatMarker, getAgentIdentity } from "../../agent/context.js"
 import type { ToolRegistrar } from "../../mcp/tool-registration-boundary.js"
+import type { GeminiDelegationService } from "../delegation/gemini-service.js"
 import type { PeekabooClient, PeekabooObservationTarget } from "./peekaboo.js"
 import { SCREEN_IMAGE_META_KEY, SCREEN_VIEWER_URI } from "./screen-viewer.js"
 import {
@@ -12,10 +13,16 @@ import {
   windowIdInput,
 } from "./tool-shared.js"
 
+type GeminiChatImages = Pick<GeminiDelegationService, "showImage">
+
 const HOLD_KEYS_PATTERN = /^[A-Za-z0-9_+]+$/u
 
 /** Tools only the GNOME helper implements. */
-export function registerGnomeTools(registerTool: ToolRegistrar, peekaboo: PeekabooClient): void {
+export function registerGnomeTools(
+  registerTool: ToolRegistrar,
+  peekaboo: PeekabooClient,
+  geminiChat?: GeminiChatImages
+): void {
   const action = {
     readOnlyHint: false,
     destructiveHint: false,
@@ -47,14 +54,31 @@ export function registerGnomeTools(registerTool: ToolRegistrar, peekaboo: Peekab
           { target, annotate: false, noWebFocus: true },
           ctx.mcpReq.signal
         )
-        // Only ChatGPT runs the viewer widget; other clients get a standard MCP image.
-        if (getAgentIdentity()?.provider === "gemini") {
-          return {
-            content: [
-              { type: "image" as const, data: imageData, mimeType },
-              { type: "text" as const, text: "Screenshot of the user's desktop." },
-            ],
-          }
+        const agent = getAgentIdentity()
+        // Gemini shows neither the viewer widget nor MCP images, so the print is posted to the chat.
+        if (agent?.provider === "gemini") {
+          const shown = await geminiChat?.showImage(agentChatMarker(agent.sessionId), {
+            data: imageData,
+            mimeType,
+          })
+          return shown
+            ? {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "The screenshot will appear in this chat as a new message right after your reply ends. Finish your reply briefly and do not describe it yet.",
+                  },
+                ],
+              }
+            : {
+                isError: true,
+                content: [
+                  {
+                    type: "text" as const,
+                    text: "Could not show the screenshot: this chat is not open in Shellby's dedicated Chrome.",
+                  },
+                ],
+              }
         }
         return {
           content: [{ type: "text" as const, text: "The screenshot is displayed to the user." }],

@@ -11,6 +11,10 @@ const TEXT_BLOCKS = "p, li, pre, h1, h2, h3, h4, h5, h6, tr, blockquote, br"
 const SEND_BUTTON_WAIT_TICKS = 30
 const SEND_BUTTON_TICK_MS = 100
 const SUBMIT_CONFIRM_TICKS = 80
+const ATTACHMENT = "input-area-v2 uploader-file-preview"
+const UPLOAD_PROGRESS = "input-area-v2 mat-progress-spinner, input-area-v2 [role=progressbar]"
+const UPLOAD_WAIT_TICKS = 300
+const CONFIRM_LABEL = "/^(permitir|allow)$/iu"
 
 const HELPERS = `
   const composer = () => document.querySelector(${JSON.stringify(COMPOSER)});
@@ -30,6 +34,8 @@ export interface GeminiPageSnapshot {
   ready: boolean
   draft: boolean
   generating: boolean
+  /** A tool permission prompt is waiting for the user. */
+  confirming: boolean
   /** Submitted prompts rendered in the conversation. */
   users: number
   /** Responses rendered in the conversation, including one still streaming. */
@@ -61,6 +67,8 @@ export const GEMINI_SNAPSHOT_SCRIPT = `(() => {
     ready: Boolean(editor),
     draft: editor ? hasDraft(editor) : false,
     generating: Boolean(inputButton(${STOP_LABEL})),
+    confirming: [...(responses.at(-1)?.querySelectorAll("button") ?? [])]
+      .some((button) => ${CONFIRM_LABEL}.test(button.textContent.trim())),
     users: document.querySelectorAll("user-query").length,
     models: responses.length,
     text: readable(newest),
@@ -108,6 +116,33 @@ export function geminiSendScript(message: string): string {
   }
   return "no-send-button";
 })(${JSON.stringify(message)})`
+}
+
+export type GeminiAttachOutcome = "attached" | "draft" | "no-composer" | "upload-failed"
+
+/** Pasted like a clipboard image, which needs no file picker and works in a background tab. */
+export function geminiAttachImageScript(
+  base64: string,
+  mimeType: string,
+  fileName: string
+): string {
+  return `(async (data, type, name) => {
+  ${HELPERS}
+  const editor = composer();
+  if (!editor) return "no-composer";
+  if (hasDraft(editor) || document.querySelector(${JSON.stringify(ATTACHMENT)})) return "draft";
+  const bytes = Uint8Array.from(atob(data), (character) => character.charCodeAt(0));
+  const clipboard = new DataTransfer();
+  clipboard.items.add(new File([bytes], name, { type }));
+  editor.focus();
+  editor.dispatchEvent(new ClipboardEvent("paste", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+  for (let tick = 0; tick < ${UPLOAD_WAIT_TICKS}; tick += 1) {
+    await new Promise((resolve) => setTimeout(resolve, ${SEND_BUTTON_TICK_MS}));
+    if (document.querySelector(${JSON.stringify(ATTACHMENT)}) && !document.querySelector(${JSON.stringify(UPLOAD_PROGRESS)}))
+      return "attached";
+  }
+  return "upload-failed";
+})(${JSON.stringify(base64)}, ${JSON.stringify(mimeType)}, ${JSON.stringify(fileName)})`
 }
 
 export function geminiMarkerScript(marker: string): string {

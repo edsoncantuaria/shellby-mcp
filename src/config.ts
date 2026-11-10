@@ -85,6 +85,10 @@ export const MCP_CONFIG = {
     executable: resolvePathExecutable("peekaboox"),
     socketPath: join(resolveConfiguredPath(publicConfig.state_dir), "peekaboox", "daemon.sock"),
   },
+  gemini: {
+    /** Where new Gemini chats open; use `/u/<n>/app` when several Google accounts are signed in. */
+    startUrl: publicConfig.gemini.start_url,
+  },
   /** Browser-backed ChatGPT delegation settings. */
   chatGpt: {
     /** Chrome DevTools endpoint used to control the ChatGPT browser session. */

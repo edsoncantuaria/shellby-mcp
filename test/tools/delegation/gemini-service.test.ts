@@ -16,6 +16,7 @@ import type { GeminiTabs } from "../../../src/tools/delegation/gemini-browser.js
 import {
   GEMINI_SNAPSHOT_SCRIPT,
   GEMINI_TRANSCRIPT_SCRIPT,
+  geminiAttachImageScript,
   geminiMarkerScript,
   geminiSendScript,
   isGeminiConversationUrl,
@@ -33,6 +34,7 @@ interface FakeTab {
   generating: boolean
   draft: boolean
   sent: string[]
+  images: number
 }
 
 /** Stands in for Chrome: answers the bridge methods with the state of fake Gemini tabs. */
@@ -49,6 +51,7 @@ function fakeBrowser(answer = "BANANA") {
       generating: false,
       draft: false,
       sent: [],
+      images: 0,
       ...overrides,
     }
     tabs.set(tab.tab_id, tab)
@@ -67,7 +70,12 @@ function fakeBrowser(answer = "BANANA") {
       if (!tab) throw new ChatGptDelegationError("AGENT_TARGET_LOST", "gone")
       if (expression === GEMINI_SNAPSHOT_SCRIPT) {
         const { users, models, text, generating, draft, url } = tab
-        return { ready: true, draft, generating, users, models, text, url }
+        return { ready: true, draft, generating, confirming: false, users, models, text, url }
+      }
+      if (expression.startsWith("(async (data, type, name)")) {
+        if (tab.draft) return "draft"
+        tab.images += 1
+        return "attached"
       }
       const message = /^\(async \(message\)[\s\S]*\}\)\((".*")\)$/u.exec(expression)?.[1]
       if (message === undefined) return false
@@ -184,6 +192,45 @@ test("dashboard delivery leaves a draft or a running response alone", async (t) 
   assert.equal(claimed, false)
 })
 
+const IMAGE = { data: "aGk=", mimeType: "image/png" }
+
+async function waitUntil(condition: () => boolean): Promise<void> {
+  for (let tries = 0; tries < 500 && !condition(); tries += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2))
+  }
+  assert.equal(condition(), true)
+}
+
+test("a print waits for the calling chat's reply, then posts once", async (t) => {
+  const { service, addTab } = setup(t)
+  const other = addTab(CHAT_URL)
+  const chat = addTab("https://gemini.google.com/u/1/app", { generating: true })
+
+  assert.equal(await service.showImage("m", IMAGE), true)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(chat.images, 0)
+
+  chat.generating = false
+  await waitUntil(() => chat.sent.length === 1)
+  assert.equal(chat.images, 1)
+  assert.equal(other.images, 0)
+})
+
+test("a print leaves a user's draft alone until it is gone", async (t) => {
+  const { service, addTab } = setup(t)
+  const chat = addTab(CHAT_URL, { draft: true })
+  assert.equal(await service.showImage("m", IMAGE), true)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(chat.images, 0)
+  chat.draft = false
+  await waitUntil(() => chat.images === 1)
+})
+
+test("a print reports failure when no chat is open", async (t) => {
+  const { service } = setup(t)
+  assert.equal(await service.showImage("m", IMAGE), false)
+})
+
 test("the router sends each caller to its own provider", async () => {
   const called: string[] = []
   const fake = (name: string) =>
@@ -225,6 +272,7 @@ test("page scripts are valid JavaScript, including quotes and newlines in messag
     GEMINI_SNAPSHOT_SCRIPT,
     GEMINI_TRANSCRIPT_SCRIPT,
     geminiSendScript('line "one"\nline `two`'),
+    geminiAttachImageScript("aGk=", "image/png", "print.png"),
     geminiMarkerScript('shellby-agent:"x"'),
   ]
   for (const script of scripts) assert.doesNotThrow(() => new Script(script))

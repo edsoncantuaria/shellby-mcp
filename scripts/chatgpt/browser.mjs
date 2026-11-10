@@ -114,7 +114,7 @@ const child = spawn(
     "--no-first-run",
     "--no-default-browser-check",
     MCP_CONFIG.chatGpt.projectUrl,
-    "https://gemini.google.com/app",
+    MCP_CONFIG.gemini.startUrl,
   ],
   { detached: true, stdio: "ignore" }
 )
