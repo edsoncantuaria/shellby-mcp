@@ -20,4 +20,4 @@ paths:
 - **`memory: false`** has no effect, and `chatgpt_project` is refused.
 - **Steering** targets the Gemini chat open in the dedicated Chrome. A lone non-delegated chat is the target; with several, only one showing the agent's marker qualifies.
 
-`computer_show` returns a standard MCP image to Gemini callers, since the viewer widget only runs in ChatGPT.
+`computer_show` cannot return an image to Gemini: it shows neither the viewer widget nor MCP image results. It pastes the print into the calling chat, recognized as the one generating during the call, and sends it once the reply ends, skipping drafts and pending tool permission prompts. Gemini needs `@Shellbymcp` in the message to use the connector at all.

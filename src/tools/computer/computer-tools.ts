@@ -3,6 +3,7 @@ import { z } from "zod"
 import type { ToolRegistrar } from "../../mcp/tool-registration-boundary.js"
 
 import { asRecord, booleanValue, finiteNumber as numberValue } from "../../utils.js"
+import type { GeminiDelegationService } from "../delegation/gemini-service.js"
 import { registerGnomeTools } from "./gnome-tools.js"
 import {
   type PeekabooClient,
@@ -28,7 +29,8 @@ const KEY_TOKEN_PATTERN = /^[A-Za-z0-9_]+$/u
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: Registration stays together so shared schemas and tool contracts remain locally auditable.
 export function registerComputerUseTools(
   registerTool: ToolRegistrar,
-  peekaboo: PeekabooClient
+  peekaboo: PeekabooClient,
+  geminiChat?: Pick<GeminiDelegationService, "showImage">
 ): void {
   const hasGnomeCommands = peekaboo.executable.endsWith("shellby-desktop")
 
@@ -619,7 +621,7 @@ export function registerComputerUseTools(
     }
   )
 
-  if (hasGnomeCommands) registerGnomeTools(registerTool, peekaboo)
+  if (hasGnomeCommands) registerGnomeTools(registerTool, peekaboo, geminiChat)
 
   const appSchema = z
     .object({

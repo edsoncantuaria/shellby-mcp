@@ -55,6 +55,9 @@ const publicConfigSchema = z.object({
     project_url: httpUrl.default("https://chatgpt.com/"),
     max_delegated_agents: z.number().int().positive().default(3),
   }),
+  gemini: z.object({
+    start_url: httpUrl.default("https://gemini.google.com/app"),
+  }),
   ngrok: z.object({
     enabled: z.boolean().default(true),
     api_port: z.number().int().min(1).max(65535).default(4040),

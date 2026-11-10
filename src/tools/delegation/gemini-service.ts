@@ -16,9 +16,11 @@ import type { GeminiTab, GeminiTabs } from "./gemini-browser.js"
 import {
   GEMINI_SNAPSHOT_SCRIPT,
   GEMINI_TRANSCRIPT_SCRIPT,
+  type GeminiAttachOutcome,
   type GeminiPageSnapshot,
   type GeminiSendOutcome,
   type GeminiTranscriptEntry,
+  geminiAttachImageScript,
   geminiMarkerScript,
   geminiSendScript,
   isGeminiConversationUrl,
@@ -36,7 +38,11 @@ const MAX_CONSECUTIVE_READ_FAILURES = 5
 /** Text must hold still this many polls, since the stop button can vanish between stream chunks. */
 const STABLE_POLLS_TO_FINISH = 2
 const MAX_CLONE_CONTEXT_CHARS = 30_000
-const GEMINI_START_URL = "https://gemini.google.com/app"
+const IMAGE_DELIVERY_TIMEOUT_MS = 10 * 60_000
+/** The stop button can vanish between a tool call and the rest of the reply. */
+const IDLE_POLLS_BEFORE_IMAGE = 2
+const IMAGE_FILE_NAME = "print.png"
+const IMAGE_CAPTION = "Print da tela."
 const INJECTED_PROMPT = `Oververbosity: 1.\n\nDo not use \`subagent\`${MCP_CONFIG.tools.computer ? " or `computer_*`" : ""} tools.`
 
 interface GeminiAgent {
@@ -66,7 +72,18 @@ interface GeminiTurn {
 }
 
 /** Delegated agents in Gemini tabs of the dedicated Chrome that ChatGPT agents also use. */
-export type GeminiDelegationService = Omit<ChatGptDelegationService, "ensureProject">
+export type GeminiDelegationService = Omit<ChatGptDelegationService, "ensureProject"> & {
+  /**
+   * Finds the calling chat and posts the image there once its reply ends. Returns false when the
+   * chat is not open in the dedicated Chrome.
+   */
+  showImage(marker: string, image: GeminiChatImage): Promise<boolean>
+}
+
+export interface GeminiChatImage {
+  data: string
+  mimeType: string
+}
 
 // biome-ignore lint/complexity/noExcessiveLinesPerFunction: Tab, turn, and persistence bookkeeping share one closure, as in the ChatGPT service.
 export function createGeminiDelegationService(
@@ -78,6 +95,7 @@ export function createGeminiDelegationService(
   const agents = new Map<string, GeminiAgent>()
   const turns = new Map<string, GeminiTurn>()
   const pendingEvents = new Map<string, string[]>()
+  const imageDeliveries = new Map<number, Promise<void>>()
   let disposed = false
 
   const cleanupTimer = setInterval(() => void closeIdleTabs(), CLEANUP_INTERVAL_MS)
@@ -164,7 +182,7 @@ export function createGeminiDelegationService(
         `Agent ${agent.agentId} lost its tab before its conversation URL was saved.`
       )
     }
-    agent.tabId = await browser.open(agent.conversationUrl ?? GEMINI_START_URL, signal)
+    agent.tabId = await browser.open(agent.conversationUrl ?? MCP_CONFIG.gemini.startUrl, signal)
     return agent.tabId
   }
 
@@ -434,12 +452,64 @@ export function createGeminiDelegationService(
     if (tabId === undefined) return "missing"
     const snapshot = await evaluate<GeminiPageSnapshot | null>(tabId, GEMINI_SNAPSHOT_SCRIPT)
     if (!snapshot?.ready) return "missing"
-    if (snapshot.generating) return "busy"
+    if (snapshot.generating || snapshot.confirming) return "busy"
     if (snapshot.draft) return "draft"
     const message = claimMessage()
     if (message === undefined) return "sent"
     assertSent(await evaluate<GeminiSendOutcome>(tabId, geminiSendScript(message)), "main")
     return "sent"
+  }
+
+  /** A tool call arrives mid-reply, so the one chat generating right now is the caller. */
+  async function findCallingChat(marker: string): Promise<number | undefined> {
+    const delegated = new Set([...agents.values()].map((agent) => agent.tabId))
+    const generating: number[] = []
+    for (const { tabId } of (await geminiTabs()).filter((tab) => !delegated.has(tab.tabId))) {
+      const snapshot = await evaluate<GeminiPageSnapshot | null>(tabId, GEMINI_SNAPSHOT_SCRIPT)
+      if (snapshot?.generating) generating.push(tabId)
+    }
+    return generating.length === 1 ? generating[0] : findAgentChat(marker)
+  }
+
+  async function showImage(marker: string, image: GeminiChatImage): Promise<boolean> {
+    const tabId = await findCallingChat(marker)
+    if (tabId === undefined) return false
+    const previous = imageDeliveries.get(tabId) ?? Promise.resolve()
+    imageDeliveries.set(
+      tabId,
+      previous.then(() =>
+        postImageWhenFree(tabId, image).catch((error: unknown) => {
+          log("warn", "delegation.gemini_image_failed", { err: error })
+        })
+      )
+    )
+    return true
+  }
+
+  async function postImageWhenFree(tabId: number, image: GeminiChatImage): Promise<void> {
+    const deadline = Date.now() + IMAGE_DELIVERY_TIMEOUT_MS
+    let idlePolls = 0
+    // biome-ignore lint/nursery/noUnmodifiedLoopCondition: dispose() sets this from outside the loop.
+    while (Date.now() < deadline && !disposed) {
+      await delay(pollMs)
+      const snapshot = await evaluate<GeminiPageSnapshot | null>(tabId, GEMINI_SNAPSHOT_SCRIPT)
+      const free =
+        snapshot?.ready && !snapshot.generating && !snapshot.confirming && !snapshot.draft
+      idlePolls = free ? idlePolls + 1 : 0
+      if (idlePolls < IDLE_POLLS_BEFORE_IMAGE) continue
+      const attached = await evaluate<GeminiAttachOutcome>(
+        tabId,
+        geminiAttachImageScript(image.data, image.mimeType, IMAGE_FILE_NAME)
+      )
+      if (attached === "draft") {
+        idlePolls = 0
+        continue
+      }
+      if (attached !== "attached") throw new Error(`Gemini image attach failed: ${attached}.`)
+      assertSent(await evaluate<GeminiSendOutcome>(tabId, geminiSendScript(IMAGE_CAPTION)), "main")
+      return
+    }
+    log("warn", "delegation.gemini_image_timed_out")
   }
 
   async function closeIdleTabs(): Promise<void> {
@@ -469,6 +539,7 @@ export function createGeminiDelegationService(
     poll,
     drainEvents,
     deliverToAgentChat,
+    showImage,
     dispose,
   }
 }

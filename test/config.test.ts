@@ -67,6 +67,7 @@ test("loads and validates Shellby TOML config", async (t) => {
       project_url: "https://chatgpt.com/",
       max_delegated_agents: 5,
     },
+    gemini: { start_url: "https://gemini.google.com/app" },
     ngrok: {
       enabled: true,
       api_port: 4040,

@@ -52,9 +52,9 @@ const chatGptAgents =
   MCP_CONFIG.tools.clones || MCP_CONFIG.tools.subagents
     ? createChatGptDelegationService()
     : undefined
+const geminiAgents = chatGptAgents && createGeminiDelegationService(createGeminiTabs())
 const chatGptDelegation =
-  chatGptAgents &&
-  createDelegationRouter(chatGptAgents, createGeminiDelegationService(createGeminiTabs()))
+  chatGptAgents && geminiAgents && createDelegationRouter(chatGptAgents, geminiAgents)
 const chatDelivery =
   agentObserver && chatGptDelegation
     ? createChatDelivery(agentObserver, chatGptDelegation)
@@ -82,6 +82,7 @@ try {
       peekaboo,
       peekaboox,
       chatGptDelegation,
+      geminiChat: geminiAgents,
       webPageOpener,
       externalMcp,
       browserBridge,
