@@ -4,6 +4,7 @@ import { MCP_CONFIG } from "../src/config.js"
 import { createMcpServerFactory } from "../src/mcp/server-factory.js"
 import { startMcpHttpServer } from "../src/server/http-server.js"
 import { countTokens, OUTPUT_TOKEN_ENCODING } from "../src/tokenizer.js"
+import { BrowserBridge } from "../src/tools/browser/browser-bridge.js"
 import { PeekabooClient } from "../src/tools/computer/peekaboo.js"
 import { PeekabooXClient } from "../src/tools/computer/peekaboox.js"
 import { createChatGptDelegationService } from "../src/tools/delegation/chatgpt-service.js"
@@ -28,6 +29,15 @@ const chatGptDelegation =
     ? createChatGptDelegationService()
     : undefined
 const webPageOpener = MCP_CONFIG.tools.web ? new WebPageOpener() : undefined
+// Never started: listing schemas only needs the service to exist.
+const browserBridge = MCP_CONFIG.tools.browser
+  ? new BrowserBridge({
+      host: MCP_CONFIG.host,
+      port: 0,
+      secret: "",
+      allowedOrigin: MCP_CONFIG.browserBridge.extensionOrigin,
+    })
+  : undefined
 const running = await startMcpHttpServer(
   {
     createMcpServer: createMcpServerFactory({
@@ -36,6 +46,7 @@ const running = await startMcpHttpServer(
       peekaboox,
       chatGptDelegation,
       webPageOpener,
+      browserBridge,
     }),
   },
   { port: 0 }

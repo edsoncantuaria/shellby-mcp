@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Shellby</title>
+    <link rel="stylesheet" href="ui.css" />
+  </head>
+  <body>
+    <h1>Shellby</h1>
+    <p>Status: <strong id="status">…</strong></p>
+    <form id="pair-form">
+      <label for="pairing">Pairing code from <code>npm run browser:pair</code></label>
+      <input id="pairing" type="password" autocomplete="off" spellcheck="false" />
+      <button type="submit">Pair</button>
+      <p id="pair-error" role="alert"></p>
+    </form>
+    <button id="pause" type="button"></button>
+    <h2>Sites</h2>
+    <ul id="sites"></ul>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

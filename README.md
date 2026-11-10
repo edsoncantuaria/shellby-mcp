@@ -193,6 +193,21 @@ See [Browser ChatGPT Subagents](wiki/pages/subagents/browser-chatgpt-subagents.m
 
 </details>
 
+<details>
+<summary><strong>Control your real Chrome</strong></summary>
+
+The `browser_*` tools drive your everyday Chrome, with its logins, through the extension in [`browser-extension/`](browser-extension/). They are off by default.
+
+1. Set `tools.browser = true` in `.shellby/config.toml`, then run `npm run restart`.
+2. In `chrome://extensions`, turn on Developer mode, choose **Load unpacked**, and select the `browser-extension` folder.
+3. Run `npm run browser:pair` and paste the code into the extension's popup.
+
+The agent only sees tabs in the green **Shellby** tab group. The first time it reaches a site, Chrome asks you to allow or deny that site. The popup can pause the bridge and forget a site, and dismissing Chrome's debugging banner removes that tab from the group.
+
+See [Chrome Bridge](wiki/pages/tools/browser.md) for the trust model.
+
+</details>
+
 ## Operations
 
 | Command                | Purpose                                                                        |
@@ -374,6 +389,7 @@ More startup and recovery details are in [Configuration and Startup](wiki/pages/
 - Direct localhost MCP access is unauthenticated. Do not expose the local endpoint through another untrusted proxy.
 - Trusted remote tool calls are limited to the ChatGPT subjects stored in `<state_dir>/auth.json`: the first caller, plus one account per `npm run auth:add`.
 - The dedicated authenticated Chrome profile is part of the trust boundary for browser subagents.
+- `tools.browser` lets an approved agent act with your logged-in sessions on sites you allow. Page content can try to mislead the agent, so allow only sites you are comfortable with. It is off by default.
 - `agent-commands.yaml` can contain sensitive tool inputs. It is gitignored and permission-restricted and should be treated as private.
 
 See [SECURITY.md](SECURITY.md) for reporting and scope.

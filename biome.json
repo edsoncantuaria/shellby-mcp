@@ -280,6 +280,39 @@
       }
     },
     {
+      "includes": ["browser-extension/**"],
+      "javascript": {
+        "globals": ["chrome"]
+      },
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off"
+          },
+          "nursery": {
+            "noFloatingPromises": "off",
+            "useAwaitThenable": "off"
+          },
+          "style": {
+            "useGlobalThis": "off"
+          },
+          "suspicious": {
+            "noUnnecessaryConditions": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["browser-extension/page-scripts.js"],
+      "linter": {
+        "rules": {
+          "performance": {
+            "useTopLevelRegex": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["linux/gnome-extension/**"],
       "linter": {
         "rules": {

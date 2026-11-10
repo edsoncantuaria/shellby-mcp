@@ -86,6 +86,7 @@ test("loads and validates Shellby TOML config", async (t) => {
       file_write: true,
       clones: true,
       computer: false,
+      browser: false,
       subagents: false,
       web: true,
       skills: true,

@@ -3,6 +3,8 @@ import type { AgentObserver } from "../agent/observer.js"
 import { buildMcpInstructions, MCP_CONFIG } from "../config.js"
 import type { McpAuditRequest } from "../server/audit/audit-log.js"
 import { registerApplyPatchTool } from "../tools/apply-patch/apply-patch.js"
+import type { BrowserBridge } from "../tools/browser/browser-bridge.js"
+import { registerBrowserTools } from "../tools/browser/browser-tools.js"
 import { registerComputerUseTools } from "../tools/computer/computer-tools.js"
 import type { PeekabooClient } from "../tools/computer/peekaboo.js"
 import type { PeekabooXClient } from "../tools/computer/peekaboox.js"
@@ -39,6 +41,7 @@ export interface CreateMcpServerOptions {
   peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
   externalMcp?: ExternalMcpManager
+  browserBridge?: BrowserBridge
   reviewPromptTracker?: ReviewPromptTracker
   auditRequest?: McpAuditRequest
   agentObserver?: AgentObserver
@@ -51,6 +54,7 @@ export interface McpCapabilityServices {
   peekaboox?: PeekabooXClient
   webPageOpener?: WebPageOpener
   externalMcp?: ExternalMcpManager
+  browserBridge?: BrowserBridge
 }
 
 export interface McpRuntimeProfile {
@@ -137,6 +141,8 @@ function createMcpServer(options: CreateMcpServerOptions, profile: McpRuntimePro
       registerTool,
       requireCapabilityService(options.externalMcp, "external MCP")
     )
+  if (profile.tools.browser)
+    registerBrowserTools(registerTool, requireCapabilityService(options.browserBridge, "browser"))
   if (profile.tools.clones)
     registerCloneTools(registerTool, requireCapabilityService(options.chatGptDelegation, "clone"))
   if (profile.tools.review) registerReviewTool(registerTool)

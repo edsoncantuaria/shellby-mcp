@@ -8,6 +8,8 @@ import { log, startRuntimeLogging } from "./logging.js"
 import { createMcpServerFactory } from "./mcp/server-factory.js"
 import { McpAuditLogger } from "./server/audit/audit-log.js"
 import { startMcpHttpServer } from "./server/http-server.js"
+import { ensureTunnelSecret } from "./server/tunnel-secret.js"
+import { BrowserBridge } from "./tools/browser/browser-bridge.js"
 import { CursorHostManager } from "./tools/computer/cursor-host.js"
 import { PeekabooClient } from "./tools/computer/peekaboo.js"
 import { PeekabooXClient } from "./tools/computer/peekaboox.js"
@@ -38,6 +40,14 @@ const webPageOpener = MCP_CONFIG.tools.web ? new WebPageOpener() : undefined
 const externalMcp = MCP_CONFIG.tools.externalMcp
   ? new ExternalMcpManager(MCP_CONFIG.externalMcp.servers)
   : undefined
+const browserBridge = MCP_CONFIG.tools.browser
+  ? new BrowserBridge({
+      host: MCP_CONFIG.host,
+      port: MCP_CONFIG.browserBridge.port,
+      secret: ensureTunnelSecret(MCP_CONFIG.browserBridge.secretFile, "Browser bridge secret"),
+      allowedOrigin: MCP_CONFIG.browserBridge.extensionOrigin,
+    })
+  : undefined
 const cursorHost =
   peekaboo && process.platform === "darwin"
     ? new CursorHostManager({ executable: MCP_CONFIG.peekaboo.cursorHostExecutable })
@@ -54,6 +64,7 @@ const shells = MCP_CONFIG.tools.shell
 let running: Awaited<ReturnType<typeof startMcpHttpServer>>
 try {
   await shells?.startDefault()
+  await browserBridge?.start()
   running = await startMcpHttpServer({
     createMcpServer: createMcpServerFactory({
       shellManager: shells,
@@ -62,6 +73,7 @@ try {
       chatGptDelegation,
       webPageOpener,
       externalMcp,
+      browserBridge,
     }),
     auditLogger,
     authStore,
@@ -88,6 +100,9 @@ if (peekaboo) computerStatus = `enabled via Peekaboo CLI (${MCP_CONFIG.peekaboo.
 if (peekaboox) computerStatus = `enabled via PeekabooX (${MCP_CONFIG.peekaboox.executable})`
 console.log(`Computer Use: ${computerStatus}`)
 console.log(`External MCP servers: ${externalMcp?.serverNames.join(", ") ?? "none"}`)
+console.log(
+  `Chrome bridge: ${browserBridge ? `enabled on ${MCP_CONFIG.host}:${browserBridge.port}` : "disabled"}`
+)
 if (cursorHost) console.log(`Agent cursor: ${cursorHostStarted ? "enabled" : "disabled"}`)
 console.log(
   `ChatGPT agents: ${chatGptDelegation ? `enabled via attach-only CDP ${MCP_CONFIG.chatGpt.cdpEndpoint}` : "disabled"}`
@@ -113,6 +128,7 @@ async function closeRuntimeServices(): Promise<void> {
     ["delegation", chatGptDelegation?.dispose()],
     ["cursor", cursorHost?.close()],
     ["external_mcp", externalMcp?.close()],
+    ["browser", browserBridge?.close()],
   ] as const
   const results = await Promise.allSettled(services.map(([, closing]) => closing))
   results.forEach((result, index) => {

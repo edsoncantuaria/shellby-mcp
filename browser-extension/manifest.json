@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Shellby Browser Bridge",
+  "version": "0.1.0",
+  "description": "Lets your local Shellby MCP server drive tabs in the Shellby tab group, on sites you approve.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1v4U/OXpFkG2hjJXVktOezSYGsEB/ITWj6BWnGzW22KY+EMmb0VL/klXAj6Bt84tL5xJruQrVslHk97uKK+hviYAMUP9IgsYJ1bUNEhyC188ma3H0t+SSPK3MqF1C0ZwErbhtaZ3/nEf6W7su+gRxqy/Y1LgXydMoDRdkSuDelS5r/oQR/JFVhck9q/TwuKMDysAHb52ZwLUEn8NhsOaytNPaKZlSLS4esbL5z2RqxqtboKTJRGCcB4hTJFHN3lHgj/AQk2VA5lkZz3xapWw97NPaWotcWlEsBSBImd+rZHOd7CMu36YH1XyRP4Pj23KXM3agdNh7psBp7fUbZliHQIDAQAB",
+  "minimum_chrome_version": "120",
+  "permissions": ["alarms", "debugger", "storage", "tabGroups", "tabs"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "Shellby" }
+}
