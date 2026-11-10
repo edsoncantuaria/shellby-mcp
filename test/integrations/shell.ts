@@ -237,3 +237,36 @@ test("maps an expired shell cursor to an MCP tool error", { timeout: 10_000 }, a
   assert.equal(expired.isError, true)
   assert.match(JSON.stringify(expired.content), /cursor_expired/u)
 })
+
+test("each ChatGPT conversation gets its own shells", { timeout: 20_000 }, async (t) => {
+  const running = await startMcpHttpServer()
+  t.after(() => running.close())
+  const connect = async (session: string, name: string) => {
+    const { client } = await connectClient(running.url, name, undefined, false, session)
+    t.after(() => client.close())
+    await client.callTool({
+      name: "start_here",
+      arguments: { mode: "coding", task_id: "startup-session" },
+    })
+    return client
+  }
+  const first = await connect("conversation-a", "conversation-a-client")
+  const second = await connect("conversation-b", "conversation-b-client")
+
+  await callUntilComplete(first, "first-cd", "cd /tmp && export SHELLBY_OWNER=a")
+  const isolated = await callUntilComplete(second, "second-read", `printf '%s' "$SHELLBY_OWNER"`)
+  assert.equal(isolated.output, "")
+  assert.notEqual(isolated.cwd, "/tmp")
+
+  const rejoined = await connect("conversation-a", "conversation-a-again")
+  const retained = await callUntilComplete(rejoined, "first-read", `printf '%s' "$SHELLBY_OWNER"`)
+  assert.equal(retained.output, "a")
+  assert.equal(retained.cwd, "/tmp")
+
+  const listed = await first.callTool({ name: "shell_list", arguments: {} })
+  const listing = (listed.content as { text: string }[])[0]?.text ?? ""
+  assert.match(listing, /default/u)
+  assert.doesNotMatch(listing, /agent-/u)
+  const closed = await first.callTool({ name: "shell_close", arguments: { shell_id: "default" } })
+  assert.equal(closed.isError, true)
+})

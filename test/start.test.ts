@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { copyFile, mkdir, readFile, realpath, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, readFile, realpath, utimes, writeFile } from "node:fs/promises"
 import { delimiter, join } from "node:path"
 import process from "node:process"
 import test, { type TestContext } from "node:test"
@@ -21,6 +21,7 @@ async function runStartup(
     healthInstance?: string
     ngrokEnabled?: boolean
     existingTunnel?: boolean
+    builtAhead?: boolean
   } = {}
 ) {
   const root = await realpath(await tempDir(t, "shellby-start-"))
@@ -67,6 +68,13 @@ if (${JSON.stringify(command)} === "pm2" && args[0] === "jlist") console.log(${J
 `,
       { mode: 0o755 }
     )
+  }
+
+  if (options.builtAhead) {
+    await mkdir(join(root, "dist"), { recursive: true })
+    await writeFile(join(root, "dist", "index.js"), "")
+    const later = new Date(Date.now() + 60_000)
+    await utimes(join(root, "dist", "index.js"), later, later)
   }
 
   const result = spawnSync(
@@ -199,6 +207,16 @@ test("hard restart with ngrok disabled recreates only MCP", async (t) => {
       ["pm2", "startOrReload", "ecosystem.config.cjs", "--only", "shellby-mcp", "--update-env"],
     ]
   )
+})
+
+test("a plain start skips the build only while it is current", async (t) => {
+  const current = await runStartup(t, { ngrokEnabled: false, builtAhead: true })
+  assert.equal(current.result.status, 0, current.result.stderr)
+  assert.ok(!current.calls.some(({ command }) => command === "npm"))
+
+  const restart = await runStartup(t, { ngrokEnabled: false, builtAhead: true, restart: true })
+  assert.equal(restart.result.status, 0, restart.result.stderr)
+  assert.ok(restart.calls.some(({ command, args }) => command === "npm" && args[1] === "build"))
 })
 
 test("hard restart rebuilds before replacing PM2 and clears the audit only after shutdown", async (t) => {

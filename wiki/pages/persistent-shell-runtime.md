@@ -34,6 +34,8 @@ Wait loops follow execution state, not page fullness. Preserve this separation w
 
 Manager exposes `runCommand`, `pollCommand`, and `resetShell`; it owns session lookup, restoration, and leases throughout each operation. Callers cannot retrieve raw sessions or choose cache-restoration policy. Eviction excludes busy/leased shells and `default`; it fails admission when no safe slot exists. Capture failure leaves the live shell intact. Hibernation caches only cwd/exported env, then closes the process. Missing cached cwd falls back to a clean baseline. Cache age is measured from last use and expires in the shared sweep.
 
+Each ChatGPT conversation sees only its own shells: [shell-tools.ts](../../src/tools/shell/shell-tools.ts) prefixes shell IDs with the caller's [agent identity](./agent-context.md), so a conversation's `default` is an ordinary hibernating shell that shares the manager's limit. Callers without `X-OpenAI-Session` share the protected process-wide `default`.
+
 Reset/close signal detached POSIX process groups through [child-process-termination.ts](../../src/child-process-termination.ts). TERM-to-KILL escalation is shared; generation, forced settlement, and recovery remain with each owner. Signaling is best effort; OS-denied cleanup must not crash MCP, but descendants may survive.
 
 Tests: [session](../../test/shell-session.test.ts), [manager](../../test/shell-session-manager.test.ts), [parallel](../../test/shell-parallel.test.ts), [RTK](../../test/rtk.test.ts). Direct `apply_patch` execution bypasses shell locks and records.

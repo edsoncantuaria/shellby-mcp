@@ -1,4 +1,5 @@
 import { resolve } from "node:path"
+import { getAgentIdentity } from "../../agent/context.js"
 import type { ToolRegistrar } from "../../mcp/tool-registration-boundary.js"
 import { withApplyPatchToolHint } from "./apply-patch-guidance.js"
 import { ShellSessionError, type ShellSnapshot } from "./session.js"
@@ -6,6 +7,7 @@ import type { ShellSessionManager } from "./session-manager.js"
 import {
   DEFAULT_SHELL_ID,
   type ShellBatchCommandOutput,
+  type ShellListOutput,
   type ShellPollOutput,
   type ShellRunOutput,
   shellCloseInputSchema,
@@ -18,6 +20,9 @@ import {
   shellRunInputSchema,
   shellRunOutputSchema,
 } from "./shell-contracts.js"
+
+// Absent from real shell names, so shells of callers without a conversation stay recognizable.
+const CONVERSATION_SEPARATOR = "\u0000"
 
 export function registerShellExecutionTools(
   registerTool: ToolRegistrar,
@@ -41,7 +46,7 @@ export function registerShellExecutionTools(
     async (input, ctx) => {
       try {
         const { shell_id, ...commandInput } = input
-        const snapshot = await shells.runCommand(shell_id, {
+        const snapshot = await shells.runCommand(conversationShellId(shell_id), {
           ...commandInput,
           signal: ctx.mcpReq.signal,
         })
@@ -69,7 +74,7 @@ export function registerShellExecutionTools(
     async (input, ctx) => {
       try {
         const { shell_id, ...pollInput } = input
-        const snapshot = await shells.pollCommand(shell_id, {
+        const snapshot = await shells.pollCommand(conversationShellId(shell_id), {
           ...pollInput,
           signal: ctx.mcpReq.signal,
         })
@@ -101,9 +106,9 @@ export function registerShellManagementTools(
     async (input) => {
       try {
         const { shell_id, ...resetInput } = input
-        const result = await shells.resetShell(shell_id, resetInput)
+        const result = await shells.resetShell(conversationShellId(shell_id), resetInput)
         return {
-          structuredContent: result,
+          structuredContent: { ...result, shell_id },
           content: [],
         }
       } catch (error) {
@@ -126,9 +131,10 @@ export function registerShellManagementTools(
     },
     async () => {
       try {
+        const visible = conversationShells(shells.listShells())
         const result = {
-          shells: shells.listShells(),
-          count: shells.shellCount,
+          shells: visible,
+          count: visible.length,
           limit: shells.maximumShells,
           idle_timeout_ms: shells.idleTimeoutMilliseconds,
         }
@@ -157,7 +163,13 @@ export function registerShellManagementTools(
     },
     async ({ shell_id }) => {
       try {
-        await shells.closeShell(shell_id)
+        if (shell_id === DEFAULT_SHELL_ID) {
+          throw new ShellSessionError(
+            "protected_shell",
+            `The ${JSON.stringify(DEFAULT_SHELL_ID)} shell cannot be closed. Use shell_reset to recover it if needed.`
+          )
+        }
+        await shells.closeShell(conversationShellId(shell_id))
         const result = { shell_id, closed: true as const }
         return {
           structuredContent: result,
@@ -168,6 +180,33 @@ export function registerShellManagementTools(
       }
     }
   )
+}
+
+/** Prefix that keeps one ChatGPT conversation's shells apart from every other's. */
+function conversationPrefix(): string {
+  const identity = getAgentIdentity()
+  return identity ? `${identity.agent}${CONVERSATION_SEPARATOR}` : ""
+}
+
+function conversationShellId(shellId: string): string {
+  return `${conversationPrefix()}${shellId}`
+}
+
+function conversationShells(listed: ShellListOutput["shells"]): ShellListOutput["shells"] {
+  const prefix = conversationPrefix()
+  return listed
+    .filter(({ shell_id }) =>
+      prefix ? shell_id.startsWith(prefix) : !shell_id.includes(CONVERSATION_SEPARATOR)
+    )
+    .map((shell) => {
+      const shell_id = shell.shell_id.slice(prefix.length)
+      return { ...shell, shell_id, can_close: shell_id !== DEFAULT_SHELL_ID }
+    })
+}
+
+function withoutConversationPrefix(message: string): string {
+  const prefix = conversationPrefix()
+  return prefix ? message.replaceAll(JSON.stringify(prefix).slice(1, -1), "") : message
 }
 
 function snapshotResult(snapshot: ShellSnapshot, shellId: string) {
@@ -246,7 +285,7 @@ function compactShellSnapshot(snapshot: ShellSnapshot, shellId: string): ShellRu
 function toolError(error: unknown) {
   const text =
     error instanceof ShellSessionError
-      ? `${error.code}: ${error.message}`
+      ? `${error.code}: ${withoutConversationPrefix(error.message)}`
       : `internal_error: ${error instanceof Error ? error.message : String(error)}`
   return {
     isError: true,

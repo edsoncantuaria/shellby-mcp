@@ -1,5 +1,5 @@
 import { type SpawnSyncReturns, spawnSync } from "node:child_process"
-import { access, rm } from "node:fs/promises"
+import { access, readdir, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
@@ -52,7 +52,8 @@ try {
   process.exit(1)
 }
 
-run("npm", ["run", "build"])
+// A plain start after login must stay quick; restarts always rebuild.
+if (restarting || !(await buildIsCurrent())) run("npm", ["run", "build"])
 if (hardRestart) {
   // Only a hard restart replaces the daemon's inherited macOS service context.
   run(process.execPath, ["--import", "tsx", pm2Script, "kill"])
@@ -206,6 +207,28 @@ function run(command: string, args: string[], options: RunOptions = {}): SpawnSy
 function runAllowFailure(command: string, args: string[]): void {
   // Optional cleanup must not hang startup if PM2 stops answering.
   spawnSync(command, args, { encoding: "utf8", timeout: 30_000 })
+}
+
+async function buildIsCurrent(): Promise<boolean> {
+  const builtAt = await modifiedAt(join(repoRoot, "dist", "index.js"))
+  if (builtAt === undefined) return false
+  const sources = await readdir(join(repoRoot, "src"), { recursive: true, withFileTypes: true })
+  const inputs = [
+    ...sources.filter((entry) => entry.isFile()).map((entry) => join(entry.parentPath, entry.name)),
+    ...["package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json"].map((name) =>
+      join(repoRoot, name)
+    ),
+  ]
+  const modified = await Promise.all(inputs.map(modifiedAt))
+  return modified.every((time) => time === undefined || time <= builtAt)
+}
+
+async function modifiedAt(path: string): Promise<number | undefined> {
+  try {
+    return (await stat(path)).mtimeMs
+  } catch {
+    return undefined
+  }
 }
 
 // Right after login the machine is busy enough that a healthy start can take over a minute.
