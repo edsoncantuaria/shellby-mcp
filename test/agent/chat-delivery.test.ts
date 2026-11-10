@@ -5,7 +5,12 @@ import type { AgentIdentity } from "../../src/agent/context.js"
 import { createAgentObserver } from "../../src/agent/observer.js"
 import { latestToolResultMarker } from "../../src/tools/delegation/chatgpt-browser.js"
 
-const agent: AgentIdentity = { sessionId: "session-a", agent: "agent-1", taskSlug: "dashboard" }
+const agent: AgentIdentity = {
+  sessionId: "session-a",
+  agent: "agent-1",
+  provider: "chatgpt",
+  taskSlug: "dashboard",
+}
 
 function setup(results: Array<AgentChatDeliveryResult | Error>) {
   const observer = createAgentObserver()

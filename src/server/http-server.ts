@@ -6,7 +6,7 @@ import { toNodeHandler } from "@modelcontextprotocol/node"
 import { createMcpHandler } from "@modelcontextprotocol/server"
 import type { Request, Response } from "express"
 import type { ChatDelivery } from "../agent/chat-delivery.js"
-import { runWithAgent } from "../agent/context.js"
+import { type AgentProvider, runWithAgent } from "../agent/context.js"
 import { createDashboardRouter } from "../agent/dashboard-routes.js"
 import type { AgentObserver } from "../agent/observer.js"
 import { ShellbyAuthError, type ShellbyAuthStore } from "../auth/store.js"
@@ -18,6 +18,8 @@ import type { McpAuditLogger, McpAuditRequest } from "./audit/audit-log.js"
 import { ensureTunnelSecret } from "./tunnel-secret.js"
 
 const MCP_ROUTE = /^\/mcp$/u
+const GOOGLE_USER_AGENT = /^Google\b/u
+const GEMINI_SHARED_SESSION = "gemini:shared"
 
 interface RequestRuntimeContext {
   auditRequest?: McpAuditRequest
@@ -87,20 +89,24 @@ export async function startMcpHttpServer(
   if (agentObserver) app.use("/ui", createDashboardRouter(agentObserver, chatDelivery))
 
   const handleMcpRequest = async (req: Request, res: Response): Promise<void> => {
-    const sessionId = requestSessionId(req)
-    await runWithAgent(sessionId, async () => {
-      const auditRequest = auditLogger?.startRequest(req.body)
-      let auditFinished = false
-      const finishAudit = (state: "finished" | "closed") => {
-        if (auditFinished) return
-        auditFinished = true
-        auditRequest?.finishTransport({ httpStatus: res.statusCode, state })
-      }
-      res.once("finish", () => finishAudit("finished"))
-      res.once("close", () => finishAudit("closed"))
+    const provider = requestProvider(req)
+    await runWithAgent(
+      requestSessionId(req, provider),
+      async () => {
+        const auditRequest = auditLogger?.startRequest(req.body)
+        let auditFinished = false
+        const finishAudit = (state: "finished" | "closed") => {
+          if (auditFinished) return
+          auditFinished = true
+          auditRequest?.finishTransport({ httpStatus: res.statusCode, state })
+        }
+        res.once("finish", () => finishAudit("finished"))
+        res.once("close", () => finishAudit("closed"))
 
-      await requestRuntime.run({ auditRequest }, () => nodeMcpHandler(req, res, req.body))
-    })
+        await requestRuntime.run({ auditRequest }, () => nodeMcpHandler(req, res, req.body))
+      },
+      provider
+    )
   }
 
   app.all(MCP_ROUTE, async (req: Request, res: Response) => {
@@ -233,12 +239,20 @@ function isTrustedRemoteRequest(req: Request): boolean {
   return req.get("x-shellby-remote") === "1"
 }
 
-function requestSessionId(req: Request): string | undefined {
+function requestProvider(req: Request): AgentProvider {
+  const google =
+    req.get("x-gemini-session") !== undefined || GOOGLE_USER_AGENT.test(req.get("user-agent") ?? "")
+  return google ? "gemini" : "chatgpt"
+}
+
+function requestSessionId(req: Request, provider: AgentProvider): string | undefined {
   const value =
     req.get("mcp-session-id")?.trim() ??
     req.get("x-openai-session")?.trim() ??
     req.get("x-gemini-session")?.trim()
-  return value || undefined
+  if (value) return value
+  // Gemini has not been seen sending a per-conversation ID, so its chats share one identity.
+  return provider === "gemini" && isTrustedRemoteRequest(req) ? GEMINI_SHARED_SESSION : undefined
 }
 
 function reportMcpError(error: Error): void {

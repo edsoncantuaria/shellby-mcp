@@ -1,11 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises"
 
 import { log } from "../logging.js"
+import type { AgentProvider } from "./context.js"
 import type { AgentObserver } from "./observer.js"
 
 export type AgentChatDeliveryResult = "sent" | "busy" | "draft" | "missing"
 
-/** Types into the ChatGPT tab that owns an agent's conversation. */
+/** Types into the chat tab that owns an agent's conversation. */
 export interface AgentChatTransport {
   /**
    * Calls `claimMessage` only once the chat is ready, immediately before typing. It may return
@@ -13,7 +14,8 @@ export interface AgentChatTransport {
    */
   deliverToAgentChat(
     marker: string,
-    claimMessage: () => string | undefined
+    claimMessage: () => string | undefined,
+    provider: AgentProvider
   ): Promise<AgentChatDeliveryResult>
 }
 
@@ -47,7 +49,7 @@ export function createChatDelivery(
       const target = observer.chatDeliveryTarget(agentId)
       if (!target?.pending) return
       if (!target.busy) {
-        const missing = (await attempt(agentId, target.marker)) === "missing"
+        const missing = (await attempt(agentId, target.marker, target.provider)) === "missing"
         missingSince = missing ? (missingSince ?? Date.now()) : undefined
         if (missingSince !== undefined && Date.now() - missingSince >= missingGiveUpMs) return
       }
@@ -56,16 +58,24 @@ export function createChatDelivery(
     log("warn", "agent.chat_delivery_timed_out", { agent_id: agentId })
   }
 
-  async function attempt(agentId: string, marker: string): Promise<AgentChatDeliveryResult> {
+  async function attempt(
+    agentId: string,
+    marker: string,
+    provider: AgentProvider
+  ): Promise<AgentChatDeliveryResult> {
     let claimedIds: string[] = []
     try {
-      return await transport.deliverToAgentChat(marker, () => {
-        const claimed = observer.claimInstructions(agentId)
-        claimedIds = claimed.map((instruction) => instruction.id)
-        return claimed.length > 0
-          ? claimed.map((instruction) => instruction.message).join("\n\n")
-          : undefined
-      })
+      return await transport.deliverToAgentChat(
+        marker,
+        () => {
+          const claimed = observer.claimInstructions(agentId)
+          claimedIds = claimed.map((instruction) => instruction.id)
+          return claimed.length > 0
+            ? claimed.map((instruction) => instruction.message).join("\n\n")
+            : undefined
+        },
+        provider
+      )
     } catch (error) {
       observer.releaseInstructions(agentId, claimedIds)
       log("warn", "agent.chat_delivery_failed", { agent_id: agentId, err: error })

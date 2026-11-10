@@ -114,6 +114,7 @@ const child = spawn(
     "--no-first-run",
     "--no-default-browser-check",
     MCP_CONFIG.chatGpt.projectUrl,
+    "https://gemini.google.com/app",
   ],
   { detached: true, stdio: "ignore" }
 )
@@ -137,7 +138,7 @@ if (auto && process.platform === "darwin") hideManagedChrome()
 console.log("ChatGPT browser: running")
 if (setup) {
   console.log(
-    "Sign into ChatGPT in the dedicated Chrome window. Future `npm start` runs will launch this profile automatically."
+    "Sign into ChatGPT and Gemini in the dedicated Chrome window. Future `npm start` runs will launch this profile automatically."
   )
 }
 

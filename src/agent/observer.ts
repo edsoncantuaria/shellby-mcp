@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events"
 
-import { type AgentIdentity, agentChatMarker } from "./context.js"
+import { type AgentIdentity, type AgentProvider, agentChatMarker } from "./context.js"
 import { presentToolCall } from "./tool-call-presentation.js"
 
 type AgentCallStatus = "running" | "completed" | "failed"
@@ -25,6 +25,7 @@ interface AgentInstructionSnapshot {
 
 interface AgentSnapshot {
   id: string
+  provider: AgentProvider
   taskSlug?: string
   firstSeenAt: number
   lastSeenAt: number
@@ -52,14 +53,19 @@ export interface AgentObserver {
   cancelInstruction(agentId: string, instructionId: string): boolean
   drainInstructions(agent: AgentIdentity | undefined): string[]
   /** Where and whether queued instructions can go straight to the agent's chat. */
-  chatDeliveryTarget(
-    agentId: string
-  ): { marker: string; busy: boolean; pending: boolean } | undefined
+  chatDeliveryTarget(agentId: string): AgentChatDeliveryTarget | undefined
   /** Marks pending instructions delivered and returns them oldest first. */
   claimInstructions(agentId: string): AgentInstructionSnapshot[]
   /** Returns claimed instructions to the queue after a failed chat delivery. */
   releaseInstructions(agentId: string, instructionIds: readonly string[]): void
   subscribe(listener: (event: AgentObserverEvent) => void): () => void
+}
+
+interface AgentChatDeliveryTarget {
+  marker: string
+  provider: AgentProvider
+  busy: boolean
+  pending: boolean
 }
 
 const MAX_RECENT_CALLS = 12
@@ -90,6 +96,7 @@ export function createAgentObserver(now: () => number = () => Date.now()): Agent
     const timestamp = now()
     const state: AgentState = {
       id: identity.agent,
+      provider: identity.provider,
       taskSlug: identity.taskSlug,
       sessionId: identity.sessionId,
       firstSeenAt: timestamp,
@@ -204,13 +211,12 @@ export function createAgentObserver(now: () => number = () => Date.now()): Agent
     return sessionId ? agentsBySession.get(sessionId) : undefined
   }
 
-  function chatDeliveryTarget(
-    agentId: string
-  ): { marker: string; busy: boolean; pending: boolean } | undefined {
+  function chatDeliveryTarget(agentId: string): AgentChatDeliveryTarget | undefined {
     const agent = observedAgent(agentId)
     if (!agent) return undefined
     return {
       marker: agentChatMarker(agent.sessionId),
+      provider: agent.provider,
       busy: agent.activeCalls.size > 0,
       pending: agent.instructions.some((instruction) => instruction.deliveredAt === undefined),
     }
@@ -273,6 +279,7 @@ function latestActiveCall(calls: Map<string, AgentCallSnapshot>): AgentCallSnaps
 function toSnapshot(agent: AgentState): AgentSnapshot {
   return {
     id: agent.id,
+    provider: agent.provider,
     taskSlug: agent.taskSlug,
     firstSeenAt: agent.firstSeenAt,
     lastSeenAt: agent.lastSeenAt,

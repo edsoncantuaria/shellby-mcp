@@ -18,8 +18,11 @@ export interface AgentInstruction {
   deliveredAt?: number
 }
 
+export type AgentProvider = "chatgpt" | "gemini"
+
 export interface Agent {
   id: string
+  provider: AgentProvider
   taskSlug?: string
   firstSeenAt: number
   lastSeenAt: number
