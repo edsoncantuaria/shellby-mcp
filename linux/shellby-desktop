@@ -49,6 +49,7 @@ TREE_ELEMENT_TIME_BUDGET_S = 12.0
 DELIVERY_CONFIRM_BUDGET_S = 1.5
 MINIMIZED_RESTORE_WAIT_S = 0.4
 SHELL_WINDOW_ID = 0
+SHELL_WINDOW_ACTOR_LABELS = ("Wayland ", "X11 ")
 APP_LAUNCH_TIMEOUT_S = 25
 FOCUS_SEARCH_BUDGET_S = 1.0
 SMOOTH_SCROLL_FRAMES = 6
@@ -595,6 +596,9 @@ def collect_elements(window, max_depth, max_elements, max_children, deadline=Non
         except GLib.Error:
             return
         label = element_label(accessible, role)
+        # GNOME Shell lists every application window; those are observed on their own.
+        if window["id"] == SHELL_WINDOW_ID and label.startswith(SHELL_WINDOW_ACTOR_LABELS):
+            return
         extents = extents_of(accessible)
         interactive = role in INTERACTIVE_ROLES
         visible = extents is not None and extents[2] > 0 and extents[3] > 0

@@ -208,13 +208,13 @@ function runAllowFailure(command: string, args: string[]): void {
   spawnSync(command, args, { encoding: "utf8", timeout: 30_000 })
 }
 
-async function waitForMcp(attemptsRemaining = 20): Promise<boolean> {
+// Right after login the machine is busy enough that a healthy start can take over a minute.
+async function waitForMcp(attemptsRemaining = 240): Promise<boolean> {
   try {
     const response = await fetch(healthUrl, {
       signal: AbortSignal.timeout(500),
     })
-    if (response.ok && response.headers.get("x-shellby-instance") === MCP_CONFIG.instanceId)
-      return true
+    if (response.ok) return response.headers.get("x-shellby-instance") === MCP_CONFIG.instanceId
   } catch {
     // PM2 may still be starting the process.
   }
