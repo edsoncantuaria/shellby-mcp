@@ -15,8 +15,19 @@ Verify changes proportionally to their scope. Do not run broad test suites, buil
 ## Understand the codebase first
 
 - Before changing code, inspect the repository context needed to understand the task. Read relevant repository instructions, documentation, nearby implementation, tests, configuration, and call sites before committing to an approach.
-- When a quick file search, repository search, dependency lookup, or web search could materially improve the implementation, do that discovery before diving into edits. Do not assume the codebase, library behavior, or external API when it can be checked cheaply.
+- When a quick file search, repository search, or dependency lookup could materially improve the implementation, do that discovery before diving into edits. Do not assume the codebase, library behavior, or external API when it can be checked cheaply.
 - Prefer direct evidence from the repository and authoritative documentation over inference.
+
+## Research before coding
+
+Start with the repository and the installed dependency versions. Then research on the web in proportion to the risk of the change:
+
+- Local code only, such as an internal bug or refactor: no web research.
+- A specific error, API signature, or current version: a quick search.
+- An external integration, a new feature built on a library or API, or a bug with no clear cause: official documentation for the version in use, plus its issues and changelog.
+- A new stack or dependency, architecture that is hard to reverse, or security-sensitive work: compare the alternatives and their tradeoffs before editing. Use subagents for independent research threads.
+
+Link the sources behind each decision and separate verified facts from assumptions. When sources conflict, prefer official documentation and behavior verified locally. Keep private data and proprietary code out of search queries.
 
 ## Subagents
 
