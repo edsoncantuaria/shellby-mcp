@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events"
 
-import type { AgentIdentity } from "./context.js"
+import { type AgentIdentity, agentChatMarker } from "./context.js"
 import { presentToolCall } from "./tool-call-presentation.js"
 
 type AgentCallStatus = "running" | "completed" | "failed"
@@ -51,6 +51,14 @@ export interface AgentObserver {
   queueInstruction(agentId: string, message: string): AgentInstructionSnapshot | undefined
   cancelInstruction(agentId: string, instructionId: string): boolean
   drainInstructions(agent: AgentIdentity | undefined): string[]
+  /** Where and whether queued instructions can go straight to the agent's chat. */
+  chatDeliveryTarget(
+    agentId: string
+  ): { marker: string; busy: boolean; pending: boolean } | undefined
+  /** Marks pending instructions delivered and returns them oldest first. */
+  claimInstructions(agentId: string): AgentInstructionSnapshot[]
+  /** Returns claimed instructions to the queue after a failed chat delivery. */
+  releaseInstructions(agentId: string, instructionIds: readonly string[]): void
   subscribe(listener: (event: AgentObserverEvent) => void): () => void
 }
 
@@ -191,6 +199,49 @@ export function createAgentObserver(now: () => number = () => Date.now()): Agent
     return pending.reverse().map((instruction) => `Human instruction: ${instruction.message}`)
   }
 
+  function observedAgent(agentId: string): AgentState | undefined {
+    const sessionId = sessionsByAgentId.get(agentId)
+    return sessionId ? agentsBySession.get(sessionId) : undefined
+  }
+
+  function chatDeliveryTarget(
+    agentId: string
+  ): { marker: string; busy: boolean; pending: boolean } | undefined {
+    const agent = observedAgent(agentId)
+    if (!agent) return undefined
+    return {
+      marker: agentChatMarker(agent.sessionId),
+      busy: agent.activeCalls.size > 0,
+      pending: agent.instructions.some((instruction) => instruction.deliveredAt === undefined),
+    }
+  }
+
+  function claimInstructions(agentId: string): AgentInstructionSnapshot[] {
+    const agent = observedAgent(agentId)
+    if (!agent) return []
+    const timestamp = now()
+    const claimed: AgentInstructionSnapshot[] = []
+    agent.instructions = agent.instructions.map((instruction) => {
+      if (instruction.deliveredAt !== undefined) return instruction
+      const delivered = { ...instruction, deliveredAt: timestamp }
+      claimed.unshift(delivered)
+      return delivered
+    })
+    if (claimed.length > 0) emitAgent(agent)
+    return claimed.map((instruction) => ({ ...instruction }))
+  }
+
+  function releaseInstructions(agentId: string, instructionIds: readonly string[]): void {
+    const agent = observedAgent(agentId)
+    if (!agent || instructionIds.length === 0) return
+    agent.instructions = agent.instructions.map((instruction) =>
+      instructionIds.includes(instruction.id)
+        ? { id: instruction.id, message: instruction.message, createdAt: instruction.createdAt }
+        : instruction
+    )
+    emitAgent(agent)
+  }
+
   function subscribe(listener: (event: AgentObserverEvent) => void): () => void {
     events.on("event", listener)
     return () => events.off("event", listener)
@@ -204,6 +255,9 @@ export function createAgentObserver(now: () => number = () => Date.now()): Agent
     queueInstruction,
     cancelInstruction,
     drainInstructions,
+    chatDeliveryTarget,
+    claimInstructions,
+    releaseInstructions,
     subscribe,
   }
 }

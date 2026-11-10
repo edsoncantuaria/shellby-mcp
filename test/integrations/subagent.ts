@@ -36,6 +36,7 @@ for (const toolOutput of ["compact", "structured"] as const) {
       },
       ensureProject: () => Promise.reject(new Error("not used in this test")),
       drainEvents: () => [],
+      deliverToAgentChat: async () => "missing" as const,
       dispose: async () => {},
     }
     const running = await startMcpHttpServer({
@@ -162,6 +163,7 @@ test("delivers a completed subagent event on the next MCP response exactly once"
       events.delete(key)
       return pending
     },
+    deliverToAgentChat: async () => "missing" as const,
     async dispose() {},
   }
   const running = await startMcpHttpServer({ chatGptDelegation })
@@ -274,6 +276,7 @@ test("runs staggered subagents and retrieves turns across MCP client sessions", 
     drainEvents() {
       return []
     },
+    deliverToAgentChat: async () => "missing" as const,
     async dispose() {},
   }
 

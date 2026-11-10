@@ -18,7 +18,9 @@ paths:
 
 When enabled, one [observer](../../src/agent/observer.ts) tracks concurrent calls, bounded recent history, and queued instructions. [tool-call-presentation.ts](../../src/agent/tool-call-presentation.ts) owns displayed summaries. Call completion means the callback returned; a returned tool error need not appear as observer `failed`.
 
-[dashboard-routes.ts](../../src/agent/dashboard-routes.ts) owns snapshot/SSE, steering queue/cancellation, and static `/ui`/`/ui/editor` serving. Steering targets observed `agent-N` identities and drains in submission order on a later tool response. It cannot interrupt upstream generation or a pending tool. State disappears on restart. Frontend contracts and presentation belong to the [UI wiki](../../ui/wiki/AGENTS.md).
+[dashboard-routes.ts](../../src/agent/dashboard-routes.ts) owns snapshot/SSE, steering queue/cancellation, and static `/ui`/`/ui/editor` serving. Steering targets observed `agent-N` identities and drains in submission order on a later tool response. [chat-delivery.ts](../../src/agent/chat-delivery.ts) also sends it into the agent's open tab in the managed Chrome when no tool is running, so an idle agent receives it. It cannot interrupt upstream generation or a pending tool, and it never replaces a draft in the composer. State disappears on restart.
+
+`start_here` results carry `agentChatMarker(sessionId)`, the deterministic identifier present in both the MCP session and ChatGPT's stored tool results; only tool messages can claim a conversation. Each open conversation is read once in a throwaway background tab. Frontend contracts and presentation belong to the [UI wiki](../../ui/wiki/AGENTS.md).
 
 ## No inferred lineage
 

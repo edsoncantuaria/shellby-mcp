@@ -1,5 +1,6 @@
 import process from "node:process"
 import type { Browser, BrowserContext, Locator, Page } from "playwright-core"
+import { asRecord } from "../../utils.js"
 import { ChatGptDelegationError } from "./contracts.js"
 
 const BACKGROUND_PAGE_BIND_TIMEOUT_MS = 5_000
@@ -12,6 +13,14 @@ const COMPOSER_SELECTORS = [
   // The pre-hydration placeholder textarea is replaced by the real editor moments after load.
   'textarea[placeholder*="Ask ChatGPT" i]:not(.wcDTda_fallbackTextarea):not(#pending-home-input)',
 ] as const
+
+const STOP_BUTTON_SELECTOR = [
+  'button[data-testid="stop-button"]',
+  'button[aria-label="Stop"]',
+  'button[aria-label*="Stop generating" i]',
+  'button[aria-label*="Stop streaming" i]',
+].join(", ")
+const AGENT_MARKER_RE = /shellby-agent:[0-9a-f]{16}/gu
 
 const LATEST_FORKABLE_TURN_SELECTOR =
   'section[data-testid^="conversation-turn-"]:has([data-message-author-role="assistant"])'
@@ -193,6 +202,58 @@ export async function enterPrompt(
   await composer.press(process.platform === "darwin" ? "Meta+A" : "Control+A")
   await composer.press("Backspace")
   await page.keyboard.insertText(prompt)
+}
+
+/**
+ * Sends a message in a conversation the user may be looking at. Never replaces what is in the
+ * composer: a draft or a running response leaves the chat untouched. `claimMessage` runs only after
+ * those checks, and nothing can fail between the send click and returning.
+ */
+export async function sendToOpenChat(
+  page: Page,
+  claimMessage: () => string | undefined,
+  signal: AbortSignal
+): Promise<"sent" | "busy" | "draft"> {
+  if (
+    await page
+      .locator(STOP_BUTTON_SELECTOR)
+      .first()
+      .isVisible()
+      .catch(() => false)
+  )
+    return "busy"
+  const composer = await findComposer(page, signal)
+  const draft = await composer.evaluate((element) =>
+    element instanceof HTMLTextAreaElement ? element.value : (element.textContent ?? "")
+  )
+  if (draft.trim()) return "draft"
+  const message = claimMessage()
+  if (message === undefined) return "sent"
+  await composer.focus()
+  await page.keyboard.insertText(message)
+  await submitComposer(page, composer, signal)
+  return "sent"
+}
+
+/** The marker from the newest tool result; user and assistant text cannot claim a conversation. */
+export function latestToolResultMarker(payload: unknown): string | undefined {
+  const root = asRecord(payload)
+  // ChatGPT serves either a flat message list or the older node mapping.
+  const messages: unknown[] = Array.isArray(root?.messages)
+    ? root.messages
+    : Object.values(asRecord(root?.mapping) ?? {}).map((node) => asRecord(node)?.message)
+  let latest: { marker: string; createdAt: number } | undefined
+  for (const value of messages) {
+    const message = asRecord(value)
+    if (asRecord(message?.author)?.role !== "tool") continue
+    const marker = JSON.stringify(message?.content ?? "")
+      .match(AGENT_MARKER_RE)
+      ?.at(-1)
+    if (!marker) continue
+    const createdAt = typeof message?.create_time === "number" ? message.create_time : 0
+    if (!latest || createdAt >= latest.createdAt) latest = { marker, createdAt }
+  }
+  return latest?.marker
 }
 
 export async function submitComposer(

@@ -1,5 +1,6 @@
 import type { Browser, BrowserContext, Page } from "playwright-core"
 
+import type { AgentChatDeliveryResult } from "../../agent/chat-delivery.js"
 import { type AgentIdentity, getAgentIdentity } from "../../agent/context.js"
 import { MCP_CONFIG } from "../../config.js"
 import { log } from "../../logging.js"
@@ -13,8 +14,10 @@ import {
   findComposer,
   forkLatestConversationTurn,
   isChatGptUrl,
+  latestToolResultMarker,
   navigateAndCaptureConversationPayload,
   navigateChatGptPage,
+  sendToOpenChat,
   submitComposer,
   throwIfAborted,
   waitForPromise,
@@ -52,6 +55,8 @@ const CLONE_INITIAL_SETTLE_MS = 5_000
 const RATE_LIMIT_ERROR_MESSAGE =
   "ChatGPT temporarily rate limited conversation access. New subagent turns are blocked during a 15-minute cooldown. Existing turns remain available through subagent_result. Do not retry automatically."
 const SUBMISSION_GRACE_MS = 500
+const AGENT_CHAT_COMPOSER_TIMEOUT_MS = 5_000
+const AGENT_CHAT_RESCAN_MS = 60_000
 const TEMPORARY_CHAT_URL = "https://chatgpt.com/?temporary-chat=true"
 const CHATGPT_START_URL = MCP_CONFIG.chatGpt.projectUrl
 
@@ -64,6 +69,8 @@ export function createChatGptDelegationService(): ChatGptDelegationService {
   let browser: Browser | undefined
   let context: BrowserContext | undefined
   let connectPromise: Promise<void> | undefined
+  const chatMarkers = new Map<string, { marker?: string; checkedAt: number }>()
+  let chatMarkerScan: Promise<void> | undefined
 
   const cleanupTimer = setInterval(() => void cleanupIdleAgents(), CLEANUP_INTERVAL_MS)
   cleanupTimer.unref()
@@ -444,6 +451,52 @@ export function createChatGptDelegationService(): ChatGptDelegationService {
     }
   }
 
+  async function deliverToAgentChat(
+    marker: string,
+    claimMessage: () => string | undefined
+  ): Promise<AgentChatDeliveryResult> {
+    if (Date.now() < rateLimitedUntil) return "busy"
+    await ensureBrowserConnection()
+    const page = await findAgentChatPage(marker)
+    if (!page) return "missing"
+    return sendToOpenChat(page, claimMessage, AbortSignal.timeout(AGENT_CHAT_COMPOSER_TIMEOUT_MS))
+  }
+
+  async function findAgentChatPage(marker: string): Promise<Page | undefined> {
+    const openChats = new Map<string, Page>()
+    for (const page of context?.pages() ?? []) {
+      const conversationId = isChatGptUrl(page.url()) ? extractConversationId(page.url()) : undefined
+      if (conversationId) openChats.set(conversationId, page)
+    }
+    chatMarkerScan ??= scanChatMarkers([...openChats]).finally(() => {
+      chatMarkerScan = undefined
+    })
+    await chatMarkerScan
+    const matches = [...openChats].filter(([id]) => chatMarkers.get(id)?.marker === marker)
+    // A clone inherits its parent's tool results, so one marker can briefly name two chats.
+    if (matches.length > 1) log("warn", "agent.chat_delivery_ambiguous", { chats: matches.length })
+    return matches.length === 1 ? matches[0]?.[1] : undefined
+  }
+
+  /** Reads unlinked conversations in a throwaway background tab, never reloading the user's. */
+  async function scanChatMarkers(openChats: Array<[string, Page]>): Promise<void> {
+    const now = Date.now()
+    const unlinked = openChats.filter(([id]) => {
+      const known = chatMarkers.get(id)
+      return !known?.marker && now - (known?.checkedAt ?? 0) >= AGENT_CHAT_RESCAN_MS
+    })
+    if (unlinked.length === 0) return
+    const scanner = await createManagedPage()
+    try {
+      for (const [id, page] of unlinked) {
+        const payload = await navigateAndCaptureConversationPayload(scanner, page.url())
+        chatMarkers.set(id, { marker: latestToolResultMarker(payload), checkedAt: Date.now() })
+      }
+    } finally {
+      await closePageIfOpen(scanner)
+    }
+  }
+
   async function ensureBrowserConnection(signal?: AbortSignal): Promise<void> {
     if (browser?.isConnected() && context) return
     connectPromise ??= connectBrowser().finally(() => {
@@ -585,6 +638,7 @@ export function createChatGptDelegationService(): ChatGptDelegationService {
     poll: pollSubagent,
     ensureProject,
     drainEvents: drainPendingEvents,
+    deliverToAgentChat,
     dispose: disposeSubagents,
   }
 }

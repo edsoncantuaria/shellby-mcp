@@ -5,6 +5,7 @@ import { createMcpExpressApp } from "@modelcontextprotocol/express"
 import { toNodeHandler } from "@modelcontextprotocol/node"
 import { createMcpHandler } from "@modelcontextprotocol/server"
 import type { Request, Response } from "express"
+import type { ChatDelivery } from "../agent/chat-delivery.js"
 import { runWithAgent } from "../agent/context.js"
 import { createDashboardRouter } from "../agent/dashboard-routes.js"
 import type { AgentObserver } from "../agent/observer.js"
@@ -35,6 +36,7 @@ export interface McpHttpServices {
   auditLogger?: McpAuditLogger
   authStore?: ShellbyAuthStore
   agentObserver?: AgentObserver
+  chatDelivery?: ChatDelivery
 }
 
 export interface McpHttpProfileOverrides {
@@ -58,7 +60,7 @@ export async function startMcpHttpServer(
     (port !== 0 && MCP_CONFIG.cloudflared.enabled
       ? { port: MCP_CONFIG.cloudflared.originPort, secretFile: MCP_CONFIG.cloudflared.secretFile }
       : false)
-  const { createMcpServer, auditLogger, authStore, agentObserver } = services
+  const { createMcpServer, auditLogger, authStore, agentObserver, chatDelivery } = services
   const requestRuntime = new AsyncLocalStorage<RequestRuntimeContext>()
 
   const app = createMcpExpressApp({ host, jsonLimit: "1mb" })
@@ -82,7 +84,7 @@ export async function startMcpHttpServer(
     res.json({ ok: true })
   })
 
-  if (agentObserver) app.use("/ui", createDashboardRouter(agentObserver))
+  if (agentObserver) app.use("/ui", createDashboardRouter(agentObserver, chatDelivery))
 
   const handleMcpRequest = async (req: Request, res: Response): Promise<void> => {
     const sessionId = requestSessionId(req)

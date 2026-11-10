@@ -1,10 +1,14 @@
 import { fileURLToPath } from "node:url"
 import { static as expressStatic, Router } from "express"
 
+import type { ChatDelivery } from "./chat-delivery.js"
 import type { AgentObserver } from "./observer.js"
 
 /** Build the localhost-only observer dashboard and steering API mounted under `/ui`. */
-export function createDashboardRouter(agentObserver: AgentObserver): Router {
+export function createDashboardRouter(
+  agentObserver: AgentObserver,
+  chatDelivery?: ChatDelivery
+): Router {
   const router = Router()
 
   router.get("/api/agents", (_req, res) => {
@@ -40,6 +44,7 @@ export function createDashboardRouter(agentObserver: AgentObserver): Router {
       res.status(404).json({ error: "agent not found" })
       return
     }
+    chatDelivery?.deliver(req.params.agentId)
     res.status(202).json({ instruction })
   })
 
